@@ -30,6 +30,11 @@ def test_real_answers(monkeypatch):
     assert (kitty_terminal.protocol, kitty_terminal.terminal, kitty_terminal.version) == ("kitty", "kitty", "0.50.0")
     ghostty = _from("ghostty")
     assert (ghostty.protocol, ghostty.terminal, ghostty.version, ghostty.cell_size) == ("kitty", "ghostty", "1.4.0", (8, 17))
+    iterm = _from("iterm2")
+    assert (iterm.protocol, iterm.terminal, iterm.version, iterm.cell_size) == ("kitty", "iterm2", "3.7.7", (7, 17))
+    assert iterm.supported == {"kitty", "kitty-direct", "iterm2", "sixel"}
+    older_iterm = probe.capabilities_from(b"\x1b]1337;ReportCellSize=17.0;7.0;1.0\x1b\\\x1b[?64;4c", 80, 24, None, "iterm2")
+    assert older_iterm.protocol == "iterm2"  # no Kitty graphics answer: its own protocol
     wezterm = _from("wezterm")
     assert wezterm.terminal == "wezterm" and wezterm.supported == {"kitty-direct", "iterm2", "sixel"}
     assert wezterm.protocol == "iterm2"  # no Unicode placeholders known: the best overlay

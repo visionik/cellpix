@@ -2,11 +2,11 @@
 
 Images in terminal cells, MIT-licensed:
 
-- **Kitty graphics** with Unicode placeholders, for Kitty, Ghostty and Rex. An image is
+- **Kitty graphics** with Unicode placeholders, for Kitty, Ghostty, iTerm2 (3.7+) and Rex. An image is
   sent to the terminal once, then drawn as ordinary coloured text, so it scrolls, clips
   and redraws with everything around it.
 - **iTerm2 inline images, Sixel, and Kitty placements** for terminals without
-  placeholders (iTerm2, WezTerm, foot, xterm, Konsole...): painted over the image's cells
+  placeholders (older iTerm2, WezTerm, foot, xterm, Konsole...): painted over the image's cells
   after each frame, cropped to what's visible.
 - **Half blocks** (`▀`, two pixels per cell) for any terminal with 24-bit colour.
 - A **probe** that asks the terminal which it supports, and its cell size in pixels.

@@ -36,10 +36,11 @@ PROTOCOLS = ("kitty", "iterm2", "kitty-direct", "sixel", "halfblock", "off")
 """Best first. ``kitty`` draws with Unicode placeholders; ``kitty-direct``, ``iterm2``
 and ``sixel`` paint at the cursor (see :mod:`cellpix.overlay`)."""
 
-PLACEHOLDERS = {"kitty", "ghostty", "rex"}
+PLACEHOLDERS = {"kitty", "ghostty", "rex", "iterm2"}
 """Terminals (XTVERSION name, lower case) known to draw Kitty Unicode placeholders.
 
-Checked by eye (2026-11-07): Kitty 0.50.0, Ghostty 1.4.0 and Rex draw them. WezTerm 20240203 answers
+Checked by eye (2026-11-07): Kitty 0.50.0, Ghostty 1.4.0, iTerm2 3.7.7 and Rex draw them
+(only used when the terminal also answers the Kitty graphics query: older iTerm2 doesn't). WezTerm 20240203 answers
 the Kitty graphics query but doesn't draw placeholders properly, so it gets iTerm2
 inline images (or Kitty placements, or Sixel, which all work there)."""
 
