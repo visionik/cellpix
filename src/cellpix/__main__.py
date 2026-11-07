@@ -44,6 +44,48 @@ def _bouncing(frames: int = 16):
     return Image.open(buffer)
 
 
+def _tall_page(width: int):
+    """A long, detailed page (headings, text, code, boxes) to scroll: like a web page."""
+    import random
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    def font(size):
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:
+            return ImageFont.load_default()
+
+    random.seed(7)
+    words = ("terminal pixels frame image kitty cellpix render scroll update browser page text code "
+             "placeholder diff zlib encode decode widget textual console agent stream click").split()
+    page = Image.new("RGB", (width, 3600), (250, 250, 247))
+    draw = ImageDraw.Draw(page)
+    y = 20
+    while y < page.height - 120:
+        kind = random.random()
+        if kind < 0.15:
+            draw.text((24, y), " ".join(random.choices(words, k=4)).title(), fill=(20, 30, 60), font=font(28))
+            y += 46
+        elif kind < 0.3:
+            draw.rectangle((24, y, width - 24, y + 90), fill=(30, 34, 44))
+            for line in range(5):
+                draw.text((36, y + 8 + line * 16), "  " * random.randint(0, 3) + " ".join(random.choices(words, k=6)),
+                          fill=random.choice([(152, 195, 121), (229, 192, 123), (97, 175, 239), (224, 108, 117)]), font=font(13))
+            y += 104
+        elif kind < 0.4:
+            colour = random.choice([(219, 234, 254), (220, 252, 231), (254, 243, 199), (252, 231, 243)])
+            draw.rounded_rectangle((24, y, width - 24, y + 60), radius=10, fill=colour)
+            draw.text((40, y + 20), " ".join(random.choices(words, k=9)), fill=(40, 40, 40), font=font(16))
+            y += 76
+        else:
+            for _ in range(random.randint(3, 6)):
+                draw.text((24, y), " ".join(random.choices(words, k=11)), fill=(55, 55, 55), font=font(15))
+                y += 21
+            y += 12
+    return page
+
+
 def live_demo() -> None:
     """``python -m cellpix live``: a generated 640x400 scene at 15 fps. Click to drop a
     marker at that pixel; scroll to change the orbit's speed."""
@@ -63,11 +105,19 @@ def live_demo() -> None:
     width, height = 640, 400
     arguments = sys.argv[2:]
     fps = float(arguments[0]) if arguments and arguments[0].replace(".", "").isdigit() else 15.0
-    full = "full" in arguments  # worst case: every pixel changes every frame
+    full = "full" in arguments  # every pixel changes (a flat colour: compresses well)
+    scrolling = "scroll" in arguments  # real worst case: a detailed page scrolling
+    page = _tall_page(width) if scrolling else None
     marks: list[tuple[int, int]] = []
     speed = [1.0]
 
     def scene(t: float) -> Image.Image:
+        if page is not None:
+            top = int(t * 60 * 6) % (page.height - height)  # 6 pixels a frame at 60 fps
+            return page.crop((0, top, width, top + height))
+        return _scene(t)
+
+    def _scene(t: float) -> Image.Image:
         shade = int(t * 40) % 40 if full else 0
         picture = Image.new("RGB", (width, height), (18 + shade, 24, 38))
         draw = ImageDraw.Draw(picture)
@@ -116,7 +166,7 @@ def live_demo() -> None:
             frames = max(1, live.frames_shown)
             elapsed = time.monotonic() - self.started
             line = (
-                f"target {fps:g} fps{' (whole frame changes)' if full else ''}: {live.frames_shown / elapsed:.1f} fps shown, "
+                f"target {fps:g} fps{' (whole frame changes)' if full else ''}{' (page scrolling)' if scrolling else ''}: {live.frames_shown / elapsed:.1f} fps shown, "
                 f"{live.bytes_sent / frames / 1024:.1f} KB/frame, {live.busy_seconds / frames * 1000:.1f} ms/frame main thread"
             )
             self.query_one("#stats", Static).update(line)
