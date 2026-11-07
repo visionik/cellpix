@@ -44,6 +44,83 @@ def _bouncing(frames: int = 16):
     return Image.open(buffer)
 
 
+def live_demo() -> None:
+    """``python -m cellpix live``: a generated 640x400 scene at 15 fps. Click to drop a
+    marker at that pixel; scroll to change the orbit's speed."""
+    import math
+    import threading
+    import time
+
+    from PIL import Image, ImageDraw
+    from textual.app import App, ComposeResult
+    from textual.widgets import Footer, Static
+
+    import cellpix.textual as ct
+    from cellpix.live import LiveImage
+
+    found = ct.configure()
+    width, height = 640, 400
+    marks: list[tuple[int, int]] = []
+    speed = [1.0]
+
+    def scene(t: float) -> Image.Image:
+        picture = Image.new("RGB", (width, height), (18, 24, 38))
+        draw = ImageDraw.Draw(picture)
+        for x in range(0, width, 40):
+            draw.line([(x, 0), (x, height)], fill=(30, 40, 60))
+        for y in range(0, height, 40):
+            draw.line([(0, y), (width, y)], fill=(30, 40, 60))
+        angle = t * speed[0]
+        cx, cy = width / 2 + 180 * math.cos(angle), height / 2 + 120 * math.sin(angle)
+        draw.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=(80, 200, 255))
+        bar = int((math.sin(t * 2) + 1) / 2 * (width - 120))
+        draw.rectangle((bar, height - 30, bar + 120, height - 14), fill=(255, 170, 40))
+        draw.text((14, 12), time.strftime("%H:%M:%S") + f"  t={t:6.2f}s", fill=(230, 230, 230))
+        for mx, my in marks[-5:]:
+            draw.line([(mx - 8, my), (mx + 8, my)], fill=(255, 60, 60), width=2)
+            draw.line([(mx, my - 8), (mx, my + 8)], fill=(255, 60, 60), width=2)
+            draw.text((mx + 10, my + 4), f"{mx},{my}", fill=(255, 120, 120))
+        return picture
+
+    class Live(App):
+        CSS = "LiveImage { width: 80; height: auto; } Static { color: $text-muted; }"
+        BINDINGS = [("q", "quit", "Quit")]
+
+        def compose(self) -> ComposeResult:
+            yield Static(f"{found.protocol} ({found.terminal} {found.version}); format {found.frame_format}; "
+                         f"{'edits' if found.edits else 'whole frames'} — click to mark, scroll for speed")
+            yield LiveImage((width, height), id="live")
+            yield Static("", id="stats")
+            yield Footer()
+
+        def on_mount(self) -> None:
+            live = self.query_one(LiveImage)
+            started = time.monotonic()
+
+            def produce() -> None:
+                while self.is_running:
+                    live.push(scene(time.monotonic() - started))
+                    time.sleep(1 / 30)  # faster than shown: the newest frame wins
+
+            threading.Thread(target=produce, daemon=True).start()
+            self.set_interval(1, self.stats)
+
+        def stats(self) -> None:
+            live = self.query_one(LiveImage)
+            per_frame = live.bytes_sent / max(1, live.frames_shown) / 1024
+            self.query_one("#stats", Static).update(
+                f"{live.frames_shown} frames shown, {live.bytes_sent / 1024:.0f} KB sent, {per_frame:.1f} KB/frame"
+            )
+
+        def on_live_image_clicked(self, message: LiveImage.Clicked) -> None:
+            marks.append((message.x, message.y))
+
+        def on_live_image_scrolled(self, message: LiveImage.Scrolled) -> None:
+            speed[0] = max(0.2, min(5.0, speed[0] * (0.8 if message.delta > 0 else 1.25)))
+
+    Live().run()
+
+
 def main() -> None:
     from PIL import Image as PILImage
     from textual.app import App, ComposeResult
@@ -83,4 +160,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["live"]:
+        live_demo()
+    else:
+        main()

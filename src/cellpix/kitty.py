@@ -75,6 +75,42 @@ def frame(
     return "".join(codes)
 
 
+def pixels(picture) -> tuple[dict[str, object], bytes]:
+    """A Pillow picture as raw pixels for ``f=24``/``f=32``, zlib-compressed (``o=z``):
+    the keys to send with it, and the payload. Cheaper to make and (in most terminals)
+    to take in than PNG; see tools/decode_bench.py."""
+    import zlib
+
+    has_alpha = picture.mode in ("RGBA", "LA") or (picture.mode == "P" and "transparency" in picture.info)
+    picture = picture.convert("RGBA" if has_alpha else "RGB")
+    keys = {"f": 32 if has_alpha else 24, "s": picture.width, "v": picture.height, "o": "z"}
+    return keys, zlib.compress(picture.tobytes(), 1)
+
+
+def _chunked(first: dict[str, object], data: bytes, more: dict[str, object], chunk_bytes: int) -> str:
+    encoded = base64.standard_b64encode(data).decode("ascii")
+    chunks = [encoded[start : start + chunk_bytes] for start in range(0, len(encoded), chunk_bytes)] or [""]
+    if len(chunks) == 1:
+        return command(first, chunks[0])  # no m key: Rex has shown nothing for a one-shot m=0
+    codes = [command({**first, "m": 1}, chunks[0])]
+    codes += [command({**more, "m": 1, "q": 2}, chunk) for chunk in chunks[1:-1]]
+    codes.append(command({**more, "m": 0, "q": 2}, chunks[-1]))
+    return "".join(codes)
+
+
+def transmit_pixels(image_id: int, picture, *, chunk_bytes: int = CHUNK_BYTES) -> str:
+    """Send a picture as zlib-compressed raw pixels for later display (``a=t``)."""
+    keys, data = pixels(picture)
+    return _chunked({"a": "t", "t": "d", "i": image_id, **keys, "q": 2}, data, {}, chunk_bytes)
+
+
+def edit_pixels(image_id: int, picture, x: int, y: int, *, frame: int = 1, chunk_bytes: int = CHUNK_BYTES) -> str:
+    """Overwrite part of a frame in place with zlib-compressed raw pixels."""
+    keys, data = pixels(picture)
+    first = {"a": "f", "i": image_id, "r": frame, "x": x, "y": y, **keys, "X": 1, "q": 2}
+    return _chunked(first, data, {"a": "f"}, chunk_bytes)
+
+
 def edit(image_id: int, png: bytes, x: int, y: int, *, frame: int = 1, chunk_bytes: int = CHUNK_BYTES) -> str:
     """Overwrite part of a frame in place: the PNG's pixels at (x, y) of frame ``frame``
     (``a=f`` with ``r``; ``X=1`` replaces rather than blends). For live pictures, only

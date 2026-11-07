@@ -85,6 +85,24 @@ class Capabilities:
     """Escape codes for the terminal must go through tmux's passthrough."""
 
     @property
+    def frame_format(self) -> str:
+        """How to send pictures that change often: ``pixels`` (raw, zlib-compressed) or
+        ``png``. Measured (tools/decode_bench.py): raw + zlib is cheapest for Ghostty,
+        Rex, Kitty and WezTerm to take in; iTerm2 takes raw pixels slowly, PNG quickly."""
+        return "png" if self.terminal == "iterm2" else "pixels"
+
+    @property
+    def edits(self) -> bool:
+        """Does the terminal redraw a placeholder image edited in place (``a=f`` with
+        ``r``)? Where Kitty animations play natively (the same frame commands): checked
+        by eye in Rex; elsewhere live pictures swap whole frames instead."""
+        override = os.environ.get("CELLPIX_EDITS", "")
+        if override in ("0", "1"):
+            return override == "1"
+        minimum = KITTY_ANIMATION.get(self.terminal)
+        return self.protocol == "kitty" and minimum is not None and _version(self.version) >= minimum
+
+    @property
     def animation(self) -> str:
         """How pictures move in the chosen protocol: ``native`` (the terminal plays them),
         ``stepped`` (cellpix swaps whole frames itself, for placeholder terminals without
