@@ -125,7 +125,10 @@ def main() -> None:
             prepared[(name, kind)] = (payload.encode("ascii"), ids)
     fd = os.open("/dev/tty", os.O_RDWR)
     saved = termios.tcgetattr(fd)
-    lines = [f"terminal: {os.environ.get('TERM_PROGRAM', '?')}  frames: {FRAMES} x {SIZE[0]}x{SIZE[1]}, best of {RUNS}"]
+    from cellpix.probe import detect
+
+    found = detect()  # XTVERSION: TERM_PROGRAM is inherited across terminals
+    lines = [f"terminal: {found.terminal} {found.version}  frames: {FRAMES} x {SIZE[0]}x{SIZE[1]}, best of {RUNS}"]
     try:
         tty.setcbreak(fd, termios.TCSANOW)
         os.write(fd, b"\x1b[2J\x1b[Hmeasuring...\r\n")
