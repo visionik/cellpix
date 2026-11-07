@@ -37,4 +37,4 @@ Viewer().run()
   whose library keeps at most 10 MB) deletes pictures not drawn lately, and they're sent
   again if they come back into view.
 - Inside tmux (with `allow-passthrough on`), Kitty placeholders only; elsewhere half blocks.
-- Not yet: Windows.
+- Not yet (phase 3): Windows (a console-API probe, then Sixel for Windows Terminal).
