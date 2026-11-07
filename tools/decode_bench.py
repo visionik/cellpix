@@ -130,7 +130,8 @@ def main() -> None:
         tty.setcbreak(fd, termios.TCSANOW)
         os.write(fd, b"\x1b[2J\x1b[Hmeasuring...\r\n")
         for kind in kinds:
-            line = f"accepted {kind:6s}: {accepted(fd, pictures['web'], kind)}"
+            # A small picture: one chunk in every format (queries may not be chunked).
+            line = f"accepted {kind:6s}: {accepted(fd, pictures['web'].crop((0, 0, 32, 16)), kind)}"
             lines.append(line)
             os.write(fd, (line + "\r\n").encode())
         for (name, kind), (payload, ids) in prepared.items():
