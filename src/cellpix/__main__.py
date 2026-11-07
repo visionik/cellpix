@@ -21,24 +21,25 @@ def _gradient():
     return image
 
 
-def _bouncing(frames: int = 24):
-    """An animated GIF: a ball bouncing across a gradient, with a frame counter."""
+def _bouncing(frames: int = 16):
+    """An animated GIF: a ball bouncing across a gradient, with a frame counter. Small
+    enough (320x120, 16 frames: ~2.4 MB decoded) to play natively within Rex's budget."""
     import io
 
     from PIL import Image, ImageDraw
 
     pictures = []
     for number in range(frames):
-        image = Image.new("RGB", (480, 200))
+        image = Image.new("RGB", (320, 120))
         draw = ImageDraw.Draw(image)
-        for x in range(480):
-            draw.line([(x, 0), (x, 199)], fill=(40, 60 + x * 120 // 479, 140))
-        position = abs((number * 2 * 400 // frames) % 800 - 400)
-        draw.ellipse((position + 10, 60, position + 70, 120), fill=(255, 200, 40))
-        draw.text((12, 10), f"frame {number + 1}/{frames}", fill=(255, 255, 255))
+        for x in range(320):
+            draw.line([(x, 0), (x, 119)], fill=(40, 60 + x * 120 // 319, 140))
+        position = abs((number * 2 * 260 // frames) % 520 - 260)
+        draw.ellipse((position + 10, 40, position + 50, 80), fill=(255, 200, 40))
+        draw.text((10, 8), f"frame {number + 1}/{frames}", fill=(255, 255, 255))
         pictures.append(image)
     buffer = io.BytesIO()
-    pictures[0].save(buffer, format="GIF", save_all=True, append_images=pictures[1:], duration=60, loop=0)
+    pictures[0].save(buffer, format="GIF", save_all=True, append_images=pictures[1:], duration=80, loop=0)
     buffer.seek(0)
     return Image.open(buffer)
 
@@ -58,7 +59,7 @@ def main() -> None:
     ]
 
     class Demo(App):
-        CSS = "Image { width: 60; height: auto; margin: 0 0 1 0; } Static { color: $text-muted; }"
+        CSS = "Image { width: 40; height: auto; margin: 0 0 1 0; } Static { color: $text-muted; }"
         BINDINGS = [("q", "quit", "Quit")]
 
         def compose(self) -> ComposeResult:
