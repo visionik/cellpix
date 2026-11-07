@@ -78,9 +78,10 @@ def command(image_id: int, picture: Image.Image, kind: str) -> str:
 
 
 def accepted(fd: int, picture: Image.Image, kind: str) -> str:
-    """Send one frame asking for a reply (q=0): 'OK', or the terminal's error."""
+    """Send one frame as a query (a=q: the terminal loads it, doesn't store it, and
+    answers 'OK' or its error; a plain transmit gets no answer in Rex or WezTerm)."""
     image_id = kitty.new_image_id()
-    payload = command(image_id, picture, kind).replace(",q=2", "", 1).encode("ascii")
+    payload = command(image_id, picture, kind).replace("a=t,", "a=q,", 1).replace(",q=2", "", 1).encode("ascii")
     answer = b""
     view = memoryview(payload + b"\x1b[c")
     while view:
