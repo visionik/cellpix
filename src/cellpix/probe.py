@@ -44,14 +44,11 @@ Checked by eye (2026-11-07): Kitty 0.50.0, Ghostty 1.4.0, iTerm2 3.7.7 and Rex d
 the Kitty graphics query but doesn't draw placeholders properly, so it gets iTerm2
 inline images (or Kitty placements, or Sixel, which all work there)."""
 
-KITTY_ANIMATION = {"kitty": (0,), "ghostty": (1, 4)}
+KITTY_ANIMATION = {"kitty": (0,), "ghostty": (1, 4), "rex": (0,)}
 """Terminals (XTVERSION name: lowest version) that play Kitty animations themselves
-(``a=f`` frames, ``a=a``). Checked by eye (2026-11-07): Kitty 0.50, Ghostty 1.4.0 yes;
-Ghostty 1.3.1 lacks ``a=f``; iTerm2 3.7.7 and Rex don't play them."""
-
-STEPPED_ANIMATION = {"rex"}
-"""Terminals without Kitty animation playback whose image pixels can be replaced in place
-(``a=f`` editing frame 1): cellpix steps through the frames itself."""
+(``a=f`` frames, ``a=a``). Checked by eye (2026-11-07): Kitty 0.50, Ghostty 1.4.0 and Rex
+yes; Ghostty 1.3.1 lacks ``a=f``; iTerm2 3.7.7 doesn't (it plays GIFs in its own protocol).
+Elsewhere with placeholders, cellpix steps through the frames itself."""
 
 BUDGETS = {"rex": 8 * 1024 * 1024}
 """Image memory to stay under, where a terminal keeps less than usual (Rex: 10 MB)."""
@@ -90,7 +87,8 @@ class Capabilities:
     @property
     def animation(self) -> str:
         """How pictures move in the chosen protocol: ``native`` (the terminal plays them),
-        ``stepped`` (cellpix replaces the frames itself), or ``""`` (they stay still).
+        ``stepped`` (cellpix swaps whole frames itself, for placeholder terminals without
+        playback), or ``""`` (they stay still).
         ``CELLPIX_ANIMATION=native|stepped|0`` overrides it for Kitty terminals."""
         if self.protocol == "iterm2":
             return "native"  # the terminal plays a GIF
@@ -104,7 +102,9 @@ class Capabilities:
         minimum = KITTY_ANIMATION.get(self.terminal)
         if minimum is not None and _version(self.version) >= minimum:
             return "native"
-        return "stepped" if self.terminal in STEPPED_ANIMATION else ""
+        # Stepping needs nothing but sending and placing images (double-buffered): any
+        # placeholder terminal can. Placements at the cursor would flicker: still there.
+        return "stepped" if self.protocol == "kitty" else ""
 
 
 def detect(timeout: float = 0.5, tty_path: str = "/dev/tty") -> Capabilities:

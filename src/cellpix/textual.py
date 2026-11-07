@@ -147,7 +147,7 @@ class Image(Widget):
         # Animation: played by the terminal where it can, else stepped through by us.
         wants = (_animate if animate is None else animate) and frames.is_animated(image)
         mode = _animation_mode(self.protocol) if wants else ""
-        if wants and not mode and protocol is None and _better_for_animation():
+        if wants and mode != "native" and protocol is None and _better_for_animation():
             # e.g. iTerm2: placeholders for still pictures, its own GIFs for moving ones.
             self.protocol, mode = "iterm2", "native"
         if mode == "stepped" and self.protocol != "kitty":
@@ -412,6 +412,12 @@ class Image(Widget):
         moving = None
         if self._animating:
             moving = frames.frames(self.image, fit, max_bytes=self._frame_budget())
+            if moving is None and self._animation == "native":
+                # Too big for the terminal to keep every frame: step through them instead
+                # (it then holds two at a time).
+                moving = frames.frames(self.image, fit, max_bytes=frames.MAX_BYTES)
+                if moving is not None:
+                    self.app.call_from_thread(setattr, self, "_animation", "stepped")
             if moving is None:
                 self.app.call_from_thread(setattr, self, "_animating", False)  # still, then
         pictures = moving or [(fit(self.image), 0)]
