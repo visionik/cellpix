@@ -33,7 +33,7 @@ class EditTest(App):
 
     def __init__(self, log_path: str | None) -> None:
         super().__init__()
-        self.log = open(log_path, "w", buffering=1) if log_path else None
+        self.log_file = open(log_path, "w", buffering=1) if log_path else None
         self.base = PILImage.new("RGB", SIZE, BACKGROUND)
         self.picture = ct.Image(self.base, protocol="kitty", animate=False)
         self.x, self.edits = 0, 0
@@ -67,8 +67,8 @@ class EditTest(App):
         self.picture._write(codes)
         self.edits += 1
         self.query_one("#count", Static).update(f"{self.edits} edits sent ({len(codes)} bytes the last)")
-        if self.log:
-            self.log.write(f"{time.monotonic():.2f} edit x={self.x} {len(codes)}B {codes[:60]!r}\n")
+        if self.log_file:
+            self.log_file.write(f"{time.monotonic():.2f} edit x={self.x} {len(codes)}B {codes[:60]!r}\n")
 
 
 if __name__ == "__main__":
