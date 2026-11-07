@@ -37,7 +37,11 @@ PROTOCOLS = ("kitty", "iterm2", "kitty-direct", "sixel", "halfblock", "off")
 and ``sixel`` paint at the cursor (see :mod:`cellpix.overlay`)."""
 
 PLACEHOLDERS = {"kitty", "ghostty", "rex"}
-"""Terminals (XTVERSION name, lower case) known to draw Kitty Unicode placeholders."""
+"""Terminals (XTVERSION name, lower case) known to draw Kitty Unicode placeholders.
+
+Checked by eye (2026-11-07): Kitty 0.50.0 and Rex draw them. WezTerm 20240203 answers
+the Kitty graphics query but doesn't draw placeholders properly, so it gets iTerm2
+inline images (or Kitty placements, or Sixel, which all work there)."""
 
 BUDGETS = {"rex": 8 * 1024 * 1024}
 """Image memory to stay under, where a terminal keeps less than usual (Rex: 10 MB)."""

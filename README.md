@@ -2,9 +2,12 @@
 
 Images in terminal cells, MIT-licensed:
 
-- **Kitty graphics** with Unicode placeholders, for Kitty, Ghostty, WezTerm and Rex. An
-  image is sent to the terminal once, then drawn as ordinary coloured text, so it scrolls,
-  clips and redraws with everything around it.
+- **Kitty graphics** with Unicode placeholders, for Kitty, Ghostty and Rex. An image is
+  sent to the terminal once, then drawn as ordinary coloured text, so it scrolls, clips
+  and redraws with everything around it.
+- **iTerm2 inline images, Sixel, and Kitty placements** for terminals without
+  placeholders (iTerm2, WezTerm, foot, xterm, Konsole...): painted over the image's cells
+  after each frame, cropped to what's visible.
 - **Half blocks** (`▀`, two pixels per cell) for any terminal with 24-bit colour.
 - A **probe** that asks the terminal which it supports, and its cell size in pixels.
 - A **Textual** widget (`pip install cellpix[textual]`).
@@ -33,4 +36,5 @@ Viewer().run()
 - Pictures are sent scaled to the size they're shown at. A memory budget (8 MB in Rex,
   whose library keeps at most 10 MB) deletes pictures not drawn lately, and they're sent
   again if they come back into view.
-- Not yet: tmux passthrough, Windows, Sixel.
+- Inside tmux (with `allow-passthrough on`), Kitty placeholders only; elsewhere half blocks.
+- Not yet: Windows.
