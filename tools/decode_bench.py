@@ -77,6 +77,23 @@ def command(image_id: int, picture: Image.Image, kind: str) -> str:
     return "".join(codes)
 
 
+def accepted(fd: int, picture: Image.Image, kind: str) -> str:
+    """Send one frame asking for a reply (q=0): 'OK', or the terminal's error."""
+    image_id = kitty.new_image_id()
+    payload = command(image_id, picture, kind).replace(",q=2", "", 1).encode("ascii")
+    answer = b""
+    view = memoryview(payload + b"\x1b[c")
+    while view:
+        view = view[os.write(fd, view[:65536]) :]
+    while not DA1.search(answer):
+        if not select.select([fd], [], [], 10)[0]:
+            break
+        answer += os.read(fd, 4096)
+    os.write(fd, kitty.delete(image_id).encode())
+    reply = re.search(rb"\x1b_Gi=\d+;([^\x1b]*)\x1b\\", answer)
+    return reply.group(1).decode(errors="replace") if reply else "no reply"
+
+
 def timed(fd: int, payload: bytes) -> float:
     """Seconds from the first byte to the device attributes answer after it."""
     answer = b""
@@ -111,6 +128,10 @@ def main() -> None:
     try:
         tty.setcbreak(fd, termios.TCSANOW)
         os.write(fd, b"\x1b[2J\x1b[Hmeasuring...\r\n")
+        for kind in kinds:
+            line = f"accepted {kind:6s}: {accepted(fd, pictures['web'], kind)}"
+            lines.append(line)
+            os.write(fd, (line + "\r\n").encode())
         for (name, kind), (payload, ids) in prepared.items():
             clear = "".join(kitty.delete(image_id) for image_id in ids).encode()
             times = []
