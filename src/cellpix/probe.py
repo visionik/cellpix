@@ -94,8 +94,9 @@ class Capabilities:
     @property
     def edits(self) -> bool:
         """Does the terminal redraw a placeholder image edited in place (``a=f`` with
-        ``r``)? Where Kitty animations play natively (the same frame commands): checked
-        by eye in Rex; elsewhere live pictures swap whole frames instead."""
+        ``r``)? Where Kitty animations play natively (the same frame commands). Checked
+        by eye: Rex and Kitty 0.50 yes; iTerm2 3.7.7 no (the picture stays on its first
+        frame). Elsewhere live pictures swap whole frames instead."""
         override = os.environ.get("CELLPIX_EDITS", "")
         if override in ("0", "1"):
             return override == "1"
