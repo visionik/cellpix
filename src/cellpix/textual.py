@@ -158,6 +158,7 @@ class Image(Widget):
         self._paused = False
         self._steps: list[tuple[bytes, int]] = []  # stepped animation: encoded frames
         self._step_index = 0
+        self._spare_id = kitty.new_image_id()  # stepped: the other buffer
 
     @property
     def animated(self) -> bool:
@@ -237,14 +238,22 @@ class Image(Widget):
                 self._write(kitty.animate(self._image_id, run=not hidden))
 
     def _step(self) -> None:
-        """Stepped animation: show the next frame by overwriting frame 1's pixels."""
+        """Stepped animation, double-buffered: send the next frame as a whole image under
+        the spare id (with its own placement), then switch the placeholder text to it.
+        Terminals that don't redraw in-place edits (Rex) still show every frame."""
         if not self.is_attached or not self._steps:
             return
         gap = self._steps[self._step_index][1]
-        if self._sent_box is not None and not self._paused:
+        if self._sent_box is not None and self._placed is not None and not self._paused:
             self._step_index = (self._step_index + 1) % len(self._steps)
             png, gap = self._steps[self._step_index]
-            self._write(kitty.frame(self._image_id, png, replace=1))
+            columns, rows = self._placed
+            shown, spare = self._image_id, self._spare_id
+            self._write(kitty.delete(spare) + kitty.transmit(spare, png) + kitty.place(spare, columns, rows))
+            _registry.remove(shown)
+            _registry.add(spare, self._sent_box[0] * self._sent_box[1] * 4, self)
+            self._image_id, self._spare_id = spare, shown
+            self.refresh()  # the placeholder text now names the new image
         self.set_timer(max(gap, frames.MIN_GAP) / 1000, self._step)
 
     # Overlay protocols: painted at the cursor after each frame ---------------------------
@@ -433,6 +442,8 @@ class Image(Widget):
             _Painter.for_app(self.app).widgets.discard(self)
         if self._sent_box is not None and self.protocol in ("kitty", "kitty-direct"):
             self._write(kitty.delete(self._image_id))
+            if self._steps:
+                self._write(kitty.delete(self._spare_id))
         _registry.remove(self._image_id)
         self._sent_box = self._placed = None
 

@@ -116,9 +116,11 @@ async def test_rex_steps_through_the_frames_itself():
         await pilot.pause(0.6)
         sent = "".join(written)
     ct.configure(Capabilities("halfblock"))
-    image_id = widget._image_id
-    assert widget.animated and "a=a," not in sent  # nothing for the terminal to play
-    assert sent.count(f"a=f,i={image_id},r=1,f=100,X=1") >= 3  # frame 1 overwritten, again and again
+    ids = {widget._image_id, widget._spare_id}
+    assert widget.animated and "a=a," not in sent and "a=f," not in sent  # we do the playing
+    transmits = re.findall(r"a=t,f=100,t=d,i=(\d+)", sent)
+    assert len(transmits) >= 4 and {int(found) for found in transmits} == ids  # both buffers, in turn
+    assert all(first != second for first, second in zip(transmits[1:], transmits[2:]))
 
 
 async def test_iterm2_uses_its_own_gifs_for_moving_pictures_only():
