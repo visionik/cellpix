@@ -28,7 +28,7 @@ from rich.style import Style
 from textual.strip import Strip
 from textual.widget import Widget
 
-from cellpix import halfblock, iterm2, kitty, sixel
+from cellpix import frames, halfblock, iterm2, kitty, sixel
 from cellpix.probe import Capabilities, detect
 
 if TYPE_CHECKING:
@@ -37,9 +37,16 @@ if TYPE_CHECKING:
 _capabilities = Capabilities("halfblock", reason="cellpix.textual.configure() wasn't called")
 
 
-def configure(capabilities: Capabilities | None = None) -> Capabilities:
-    """Set what the terminal can draw (probing it if not given). Call before ``App.run``."""
-    global _capabilities
+_animate = True
+
+
+def configure(capabilities: Capabilities | None = None, *, animate: bool = True) -> Capabilities:
+    """Set what the terminal can draw (probing it if not given). Call before ``App.run``.
+
+    ``animate=False`` keeps animated pictures (GIF, WebP, APNG) still, on their first frame.
+    """
+    global _capabilities, _animate
+    _animate = animate
     _capabilities = capabilities if capabilities is not None else detect()
     _registry.budget = _capabilities.image_budget
     return _capabilities
@@ -118,6 +125,7 @@ class Image(Widget):
         image: "PILImage",
         *,
         protocol: str | None = None,
+        animate: bool | None = None,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -136,6 +144,17 @@ class Image(Widget):
         self._painted: tuple[int, int, int, int] | None = None  # visible region, screen cells
         self._canvas: tuple[tuple[int, int, int, int], PILImage] | None = None
         self._crop_cache: tuple[tuple, str] | None = None
+        # Animation: played by the terminal itself, where it can.
+        wants = _animate if animate is None else animate
+        self._animating = wants and frames.is_animated(image) and _plays_animation(self.protocol)
+        self._frames: tuple[tuple, list] | None = None  # (key, [(canvas frame, gap ms)])
+        self._paused = False
+
+    @property
+    def animated(self) -> bool:
+        """Is this picture moving (an animation the terminal plays)? False for a still
+        picture, and for an animation shown still (not supported here, or too long)."""
+        return self._animating
 
     # Size ------------------------------------------------------------------------------
 
@@ -195,6 +214,17 @@ class Image(Widget):
     def on_mount(self) -> None:
         if self.protocol in OVERLAY:
             _Painter.for_app(self.app).widgets.add(self)
+        if self._animating and self.protocol == "kitty":
+            self.set_interval(0.5, self._pause_when_hidden)
+
+    def _pause_when_hidden(self) -> None:
+        """Stop the terminal playing an animation nobody can see; start it again on return."""
+        if self._sent_box is None:
+            return
+        hidden = self._visible(self.screen) is None if self.is_attached else True
+        if hidden != self._paused:
+            self._paused = hidden
+            self._write(kitty.animate(self._image_id, run=not hidden))
 
     # Overlay protocols: painted at the cursor after each frame ---------------------------
 
@@ -257,10 +287,13 @@ class Image(Widget):
         if self.protocol == "kitty-direct":
             codes = ""
             if self._sent_box is None:
-                png = _png(canvas)
-                size = canvas.width * canvas.height * 4
+                moving = self._canvas_frames(canvas) if self._animating else None
+                size = canvas.width * canvas.height * 4 * (len(moving) if moving else 1)
                 codes += "".join(kitty.delete(old) for old in _registry.make_room(size, keep=self._image_id))
-                codes += kitty.transmit(self._image_id, png)
+                if moving:
+                    codes += _kitty_animation(self._image_id, [(_png(picture), gap) for picture, gap in moving])
+                else:
+                    codes += kitty.transmit(self._image_id, _png(canvas))
                 _registry.add(self._image_id, size, self)
                 self._sent_box = canvas.size
             _registry.touch(self._image_id)
@@ -274,10 +307,36 @@ class Image(Widget):
                 # (and at the bottom of the screen, scroll it).
                 piece = piece.crop((0, 0, crop_width, crop_height - crop_height % 6))
                 code = sixel.encode(piece)
+            elif self._animating and crop == (0, 0, canvas.width, canvas.height) and (
+                moving := self._canvas_frames(canvas)
+            ):
+                # Fully visible: the terminal plays a GIF itself. Partly visible: a still crop.
+                code = iterm2.inline(_gif(moving), width, height)
             else:
                 code = iterm2.inline(_png(piece), width, height)
             self._crop_cache = (key, code)
         return move + self._crop_cache[1]
+
+    def _canvas_frames(self, canvas) -> list | None:
+        """The animation's frames, each fitted and padded like the canvas (cached)."""
+        from PIL import Image as Pillow
+
+        key = canvas.size
+        if self._frames is None or self._frames[0] != key:
+            box = canvas.size
+
+            def fit(picture):
+                scale = min(box[0] / picture.width, box[1] / picture.height)
+                size = (max(1, round(picture.width * scale)), max(1, round(picture.height * scale)))
+                padded = Pillow.new("RGBA", box, (0, 0, 0, 0))
+                padded.paste(picture.resize(size, Pillow.Resampling.LANCZOS), ((box[0] - size[0]) // 2, (box[1] - size[1]) // 2))
+                return padded
+
+            moving = frames.frames(self.image, fit, max_bytes=min(frames.MAX_BYTES, _registry.budget // 2))
+            if moving is None:
+                self._animating = False  # too long or too big: still
+            self._frames = (key, moving or [])
+        return self._frames[1] or None
 
     def _overlay_hide(self) -> str:
         if self.protocol == "kitty-direct" and self._painted is not None:
@@ -307,23 +366,33 @@ class Image(Widget):
             raise
 
     def _encode_png(self, box: tuple[int, int], columns: int, rows: int) -> None:
-        picture = self.image.copy()
-        picture.thumbnail(box)  # only ever shrinks; the terminal fits it to the cells
-        if picture.mode not in ("RGB", "RGBA"):
-            picture = picture.convert("RGBA")
-        buffer = io.BytesIO()
-        picture.save(buffer, format="PNG", compress_level=1)
-        self.app.call_from_thread(self._sent, buffer.getvalue(), picture.size, box, columns, rows)
+        def fit(picture):
+            picture = picture.copy()
+            picture.thumbnail(box)  # only ever shrinks; the terminal fits it to the cells
+            return picture if picture.mode in ("RGB", "RGBA") else picture.convert("RGBA")
 
-    def _sent(self, png: bytes, size: tuple[int, int], box: tuple[int, int], columns: int, rows: int) -> None:
+        moving = None
+        if self._animating:
+            moving = frames.frames(self.image, fit, max_bytes=min(frames.MAX_BYTES, _registry.budget // 2))
+            if moving is None:
+                self.app.call_from_thread(setattr, self, "_animating", False)  # still, then
+        pictures = moving or [(fit(self.image), 0)]
+        encoded = [(_png(picture), gap) for picture, gap in pictures]
+        self.app.call_from_thread(self._sent, encoded, pictures[0][0].size, box, columns, rows)
+
+    def _sent(self, encoded: list, size: tuple[int, int], box: tuple[int, int], columns: int, rows: int) -> None:
         if not self.is_attached:
             return
-        decoded = size[0] * size[1] * 4  # what the terminal keeps
+        decoded = size[0] * size[1] * 4 * len(encoded)  # what the terminal keeps (every frame)
         codes = [kitty.delete(old) for old in _registry.make_room(decoded, keep=self._image_id)]
         if self._sent_box is not None:
             codes.append(kitty.delete(self._image_id))  # replacing its data needs a delete
-        codes.append(kitty.transmit(self._image_id, png))
+        if len(encoded) > 1:
+            codes.append(_kitty_animation(self._image_id, encoded))
+        else:
+            codes.append(kitty.transmit(self._image_id, encoded[0][0]))
         codes.append(kitty.place(self._image_id, columns, rows))
+        self._paused = False
         self._write("".join(codes))
         _registry.add(self._image_id, decoded, self)
         self._sent_box, self._placed, self._sending = box, (columns, rows), False
@@ -352,6 +421,33 @@ class Image(Widget):
 
 OVERLAY = ("iterm2", "kitty-direct", "sixel")
 """Protocols that paint at the cursor, after Textual has drawn the frame."""
+
+
+def _plays_animation(protocol: str) -> bool:
+    """Does the terminal play animations in this protocol?"""
+    return Capabilities(protocol, terminal=_capabilities.terminal).animation
+
+
+def _kitty_animation(image_id: int, encoded: list) -> str:
+    """Codes for an animation: the first frame as the image, the rest as frames, its
+    first frame's gap, then play it, looping."""
+    (first, first_gap), rest = encoded[0], encoded[1:]
+    codes = [kitty.transmit(image_id, first)]
+    codes += [kitty.frame(image_id, png, gap) for png, gap in rest]
+    codes.append(kitty.animate(image_id, frame=1, gap=first_gap))
+    codes.append(kitty.animate(image_id, run=True))
+    return "".join(codes)
+
+
+def _gif(moving: list) -> bytes:
+    """An animated GIF of these (RGBA picture, gap) frames, looping forever."""
+    pictures = [picture for picture, _ in moving]
+    buffer = io.BytesIO()
+    pictures[0].save(
+        buffer, format="GIF", save_all=True, append_images=pictures[1:],
+        duration=[gap for _, gap in moving], loop=0, disposal=2,
+    )
+    return buffer.getvalue()
 
 
 def _png(picture) -> bytes:

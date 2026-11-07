@@ -53,6 +53,36 @@ def transmit(image_id: int, png: bytes, *, chunk_bytes: int = CHUNK_BYTES) -> st
     return "".join(codes)
 
 
+def frame(image_id: int, png: bytes, gap: int, *, chunk_bytes: int = CHUNK_BYTES) -> str:
+    """Add an animation frame (``a=f``): a whole PNG shown for ``gap`` milliseconds. Every
+    chunk of a frame carries ``a=f``."""
+    data = base64.standard_b64encode(png).decode("ascii")
+    chunks = [data[start : start + chunk_bytes] for start in range(0, len(data), chunk_bytes)] or [""]
+    first = {"a": "f", "i": image_id, "f": 100, "X": 1, "z": max(1, gap), "q": 2}
+    if len(chunks) == 1:
+        return command(first, chunks[0])
+    codes = [command({**first, "m": 1}, chunks[0])]
+    codes += [command({"a": "f", "m": 1, "q": 2}, chunk) for chunk in chunks[1:-1]]
+    codes.append(command({"a": "f", "m": 0, "q": 2}, chunks[-1]))
+    return "".join(codes)
+
+
+def animate(image_id: int, *, run: bool | None = None, frame: int | None = None, gap: int | None = None) -> str:
+    """Control an animation (``a=a``): set a frame's gap (``frame`` + ``gap``), and/or
+    run it looping forever (``run=True``) or stop it (``run=False``)."""
+    keys: dict[str, object] = {"a": "a", "i": image_id}
+    if frame is not None:
+        keys["r"] = frame
+    if gap is not None:
+        keys["z"] = max(1, gap)
+    if run is not None:
+        keys["s"] = 3 if run else 1
+        if run:
+            keys["v"] = 1  # loop forever
+    keys["q"] = 2
+    return command(keys)
+
+
 def place(image_id: int, columns: int, rows: int, placement_id: int = 1) -> str:
     """A virtual placement (``U=1``) of ``columns x rows`` cells, for placeholders to show.
 

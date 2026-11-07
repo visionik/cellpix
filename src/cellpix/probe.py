@@ -44,6 +44,11 @@ Checked by eye (2026-11-07): Kitty 0.50.0, Ghostty 1.4.0, iTerm2 3.7.7 and Rex d
 the Kitty graphics query but doesn't draw placeholders properly, so it gets iTerm2
 inline images (or Kitty placements, or Sixel, which all work there)."""
 
+KITTY_ANIMATION = {"kitty"}
+"""Terminals (XTVERSION name) known to play Kitty animations (``a=f`` frames, ``a=a``).
+``CELLPIX_ANIMATION=1``/``0`` overrides it. iTerm2 inline images always animate (a GIF
+is played by the terminal itself)."""
+
 BUDGETS = {"rex": 8 * 1024 * 1024}
 """Image memory to stay under, where a terminal keeps less than usual (Rex: 10 MB)."""
 DEFAULT_BUDGET = 64 * 1024 * 1024
@@ -77,6 +82,16 @@ class Capabilities:
     """The terminal's version, if it said."""
     tmux: bool = False
     """Escape codes for the terminal must go through tmux's passthrough."""
+
+    @property
+    def animation(self) -> bool:
+        """Can pictures move: does the terminal play animations in the chosen protocol?"""
+        override = os.environ.get("CELLPIX_ANIMATION", "")
+        if override in ("0", "1"):
+            return override == "1" and self.protocol in ("kitty", "kitty-direct", "iterm2")
+        if self.protocol == "iterm2":
+            return True
+        return self.protocol in ("kitty", "kitty-direct") and self.terminal in KITTY_ANIMATION
 
 
 def detect(timeout: float = 0.5, tty_path: str = "/dev/tty") -> Capabilities:
