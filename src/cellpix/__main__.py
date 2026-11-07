@@ -48,6 +48,7 @@ def live_demo() -> None:
     """``python -m cellpix live``: a generated 640x400 scene at 15 fps. Click to drop a
     marker at that pixel; scroll to change the orbit's speed."""
     import math
+    import os
     import threading
     import time
 
@@ -114,10 +115,15 @@ def live_demo() -> None:
             live = self.query_one(LiveImage)
             frames = max(1, live.frames_shown)
             elapsed = time.monotonic() - self.started
-            self.query_one("#stats", Static).update(
+            line = (
                 f"target {fps:g} fps{' (whole frame changes)' if full else ''}: {live.frames_shown / elapsed:.1f} fps shown, "
                 f"{live.bytes_sent / frames / 1024:.1f} KB/frame, {live.busy_seconds / frames * 1000:.1f} ms/frame main thread"
             )
+            self.query_one("#stats", Static).update(line)
+            if path := os.environ.get("CELLPIX_LIVE_STATS"):  # for terminals we can't read back
+                with open(path, "w") as out:
+                    out.write(f"{found.protocol} {found.terminal} {found.version} {found.frame_format} "
+                              f"{'edits' if found.edits else 'swap'}: {line}\n")
 
         def on_live_image_clicked(self, message: LiveImage.Clicked) -> None:
             marks.append((message.x, message.y))
