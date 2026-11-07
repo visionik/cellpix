@@ -60,11 +60,15 @@ def live_demo() -> None:
 
     found = ct.configure()
     width, height = 640, 400
+    arguments = sys.argv[2:]
+    fps = float(arguments[0]) if arguments and arguments[0].replace(".", "").isdigit() else 15.0
+    full = "full" in arguments  # worst case: every pixel changes every frame
     marks: list[tuple[int, int]] = []
     speed = [1.0]
 
     def scene(t: float) -> Image.Image:
-        picture = Image.new("RGB", (width, height), (18, 24, 38))
+        shade = int(t * 40) % 40 if full else 0
+        picture = Image.new("RGB", (width, height), (18 + shade, 24, 38))
         draw = ImageDraw.Draw(picture)
         for x in range(0, width, 40):
             draw.line([(x, 0), (x, height)], fill=(30, 40, 60))
@@ -89,7 +93,7 @@ def live_demo() -> None:
         def compose(self) -> ComposeResult:
             yield Static(f"{found.protocol} ({found.terminal} {found.version}); format {found.frame_format}; "
                          f"{'edits' if found.edits else 'whole frames'} — click to mark, scroll for speed")
-            yield LiveImage((width, height), id="live")
+            yield LiveImage((width, height), fps=fps, id="live")
             yield Static("", id="stats")
             yield Footer()
 
@@ -100,16 +104,19 @@ def live_demo() -> None:
             def produce() -> None:
                 while self.is_running:
                     live.push(scene(time.monotonic() - started))
-                    time.sleep(1 / 30)  # faster than shown: the newest frame wins
+                    time.sleep(1 / (fps * 2))  # faster than shown: the newest frame wins
 
             threading.Thread(target=produce, daemon=True).start()
+            self.started = time.monotonic()
             self.set_interval(1, self.stats)
 
         def stats(self) -> None:
             live = self.query_one(LiveImage)
-            per_frame = live.bytes_sent / max(1, live.frames_shown) / 1024
+            frames = max(1, live.frames_shown)
+            elapsed = time.monotonic() - self.started
             self.query_one("#stats", Static).update(
-                f"{live.frames_shown} frames shown, {live.bytes_sent / 1024:.0f} KB sent, {per_frame:.1f} KB/frame"
+                f"target {fps:g} fps{' (whole frame changes)' if full else ''}: {live.frames_shown / elapsed:.1f} fps shown, "
+                f"{live.bytes_sent / frames / 1024:.1f} KB/frame, {live.busy_seconds / frames * 1000:.1f} ms/frame main thread"
             )
 
         def on_live_image_clicked(self, message: LiveImage.Clicked) -> None:

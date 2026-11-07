@@ -68,6 +68,7 @@ class LiveImage(Image):
         self._swapping_id = kitty.new_image_id()  # where edits aren't known to redraw
         self.frames_shown = 0
         self.bytes_sent = 0
+        self.busy_seconds = 0.0  # main-thread time spent showing frames
 
     # Frames in ------------------------------------------------------------------------
 
@@ -90,8 +91,17 @@ class LiveImage(Image):
                 if self._pending is None:
                     self._pending = frame
             return
+        import time
+
+        started = time.perf_counter()
         self.image = frame
         self.frames_shown += 1
+        try:
+            self._show_frame()
+        finally:
+            self.busy_seconds += time.perf_counter() - started
+
+    def _show_frame(self) -> None:
         if self.protocol == "kitty":
             self._kitty_update()
         elif self.protocol in OVERLAY:
