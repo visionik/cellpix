@@ -347,6 +347,14 @@ class Image(Widget):
             self._crop_cache = (key, code)
         return move + self._crop_cache[1]
 
+    def _frame_budget(self) -> int:
+        """Decoded bytes an animation's frames may take. Played natively, the terminal keeps
+        every frame (half its image budget at most); stepped, it only ever holds two, and
+        the frames wait here."""
+        if self._animation == "stepped":
+            return frames.MAX_BYTES
+        return min(frames.MAX_BYTES, _registry.budget // 2)
+
     def _canvas_frames(self, canvas) -> list | None:
         """The animation's frames, each fitted and padded like the canvas (cached)."""
         from PIL import Image as Pillow
@@ -362,7 +370,7 @@ class Image(Widget):
                 padded.paste(picture.resize(size, Pillow.Resampling.LANCZOS), ((box[0] - size[0]) // 2, (box[1] - size[1]) // 2))
                 return padded
 
-            moving = frames.frames(self.image, fit, max_bytes=min(frames.MAX_BYTES, _registry.budget // 2))
+            moving = frames.frames(self.image, fit, max_bytes=self._frame_budget())
             if moving is None:
                 self._animating = False  # too long or too big: still
             self._frames = (key, moving or [])
@@ -403,7 +411,7 @@ class Image(Widget):
 
         moving = None
         if self._animating:
-            moving = frames.frames(self.image, fit, max_bytes=min(frames.MAX_BYTES, _registry.budget // 2))
+            moving = frames.frames(self.image, fit, max_bytes=self._frame_budget())
             if moving is None:
                 self.app.call_from_thread(setattr, self, "_animating", False)  # still, then
         pictures = moving or [(fit(self.image), 0)]

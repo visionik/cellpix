@@ -132,3 +132,14 @@ async def test_iterm2_uses_its_own_gifs_for_moving_pictures_only():
         assert ct.Image(_gif(), animate=False).protocol == "kitty"
     finally:
         ct.configure(Capabilities("halfblock"))
+
+
+async def test_stepped_animation_is_not_limited_by_the_terminal_budget():
+    """Stepped, the terminal holds two frames at a time: a long animation still moves."""
+    ct.configure(Capabilities("kitty", (8, 16), terminal="rex", image_budget=64 * 1024))
+    widget = ct.Image(_gif(gaps=(40, 40, 40), size=(200, 100)))
+    written = []
+    async with _App(widget, written).run_test() as pilot:
+        await pilot.pause(0.5)
+    ct.configure(Capabilities("halfblock"))
+    assert widget.animated and len(re.findall(r"a=t,f=100", "".join(written))) >= 3

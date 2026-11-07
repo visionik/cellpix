@@ -68,8 +68,12 @@ def main() -> None:
                     f"animation {'plays' if found.animation else 'stays still'}"
                 )
                 for name, image in images:
-                    yield Static(f"{name} ({found.protocol})")
-                    yield ct.Image(image)
+                    picture = ct.Image(image)
+                    moving = f", {picture._animation} animation" if picture.animated else (
+                        ", still" if getattr(image, "is_animated", False) else ""
+                    )
+                    yield Static(f"{name} ({picture.protocol}{moving})")
+                    yield picture
                     yield Static(f"{name} (halfblock)")
                     yield ct.Image(image, protocol="halfblock")
             yield Footer()
