@@ -546,6 +546,18 @@ class _Painter:
         if renderable is None or not self.widgets or getattr(self.app, "_batch_count", 0):
             return
         codes = "".join(widget._overlay_paint(screen, renderable) for widget in list(self.widgets))
+        self._write(codes)
+
+    def paint_now(self, widget: "Image") -> int:
+        """Paint one picture over its cells at once, without Textual redrawing them first
+        (a redraw blanks them for a moment: flicker). Returns the bytes written."""
+        if widget not in self.widgets or getattr(self.app, "_batch_count", 0):
+            return 0
+        codes = widget._overlay_paint(self.app.screen, None)  # None: repaint whatever's visible
+        self._write(codes)
+        return len(codes)
+
+    def _write(self, codes: str) -> None:
         driver = getattr(self.app, "_driver", None)
         if codes and driver is not None:
             # Inside a synchronized update, cursor saved and restored around the painting.

@@ -24,7 +24,7 @@ from textual import events
 from textual.message import Message
 
 from cellpix import kitty
-from cellpix.textual import OVERLAY, Image, _png, _registry, capabilities, cell_size
+from cellpix.textual import OVERLAY, Image, _Painter, _png, _registry, capabilities, cell_size
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -110,7 +110,9 @@ class LiveImage(Image):
                 self._write(kitty.delete(self._image_id))  # new data under the same id
                 _registry.remove(self._image_id)
                 self._sent_box = None
-            self.refresh()  # the cells redraw, and the painter paints the new frame over them
+            # Paint over the old picture directly: asking Textual to redraw the cells would
+            # blank them first, and the blank shows as flicker.
+            self.bytes_sent += _Painter.for_app(self.app).paint_now(self)
         else:
             self._halfblock = None
             self.refresh()

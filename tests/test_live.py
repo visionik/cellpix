@@ -107,3 +107,11 @@ async def test_clicks_come_back_in_frame_pixels():
     (x, y), = clicks
     assert 40 <= x < 48 and 32 <= y < 48
     assert live.to_pixels(-1, 0) is None
+
+
+async def test_overlay_frames_are_painted_over_without_a_redraw():
+    """iTerm2-protocol frames go straight over the old picture (no blank cells between)."""
+    live, first, updates, _, _ = await _run(Capabilities("iterm2", (8, 16), terminal="wezterm"))
+    paints = updates.count("\x1b]1337;File=")
+    assert paints >= 3  # each new frame painted
+    assert live.bytes_sent > 0  # and counted
