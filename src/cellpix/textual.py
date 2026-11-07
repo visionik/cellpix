@@ -28,7 +28,7 @@ from rich.style import Style
 from textual.strip import Strip
 from textual.widget import Widget
 
-from cellpix import halfblock, kitty
+from cellpix import halfblock, iterm2, kitty, sixel
 from cellpix.probe import Capabilities, detect
 
 if TYPE_CHECKING:
@@ -125,14 +125,17 @@ class Image(Widget):
         super().__init__(name=name, id=id, classes=classes)
         self.image = image
         wanted = protocol or _capabilities.protocol
-        # Overlay protocols (iterm2, sixel, kitty-direct) aren't drawn yet: half blocks.
-        self.protocol = wanted if wanted in ("kitty", "halfblock", "off") else "halfblock"
+        self.protocol = wanted if wanted in ("kitty", "halfblock", "off", *OVERLAY) else "halfblock"
         self.image_width, self.image_height = image.size
         self._image_id = kitty.new_image_id()
         self._sent_box: tuple[int, int] | None = None  # pixel box the sent copy was made for
         self._placed: tuple[int, int] | None = None  # cells of the current placement
         self._sending = False
         self._halfblock: tuple[tuple[int, int], list[Strip]] | None = None
+        # Overlay protocols: what was painted where, and the picture fitted to its box.
+        self._painted: tuple[int, int, int, int] | None = None  # visible region, screen cells
+        self._canvas: tuple[tuple[int, int, int, int], PILImage] | None = None
+        self._crop_cache: tuple[tuple, str] | None = None
 
     # Size ------------------------------------------------------------------------------
 
@@ -154,7 +157,7 @@ class Image(Widget):
             return self._kitty_line(y, columns, rows)
         if self.protocol == "halfblock":
             return self._halfblock_lines(columns, rows)[y]
-        return Strip.blank(columns)
+        return Strip.blank(columns, self.rich_style)  # overlay: painted after the frame
 
     def _kitty_line(self, y: int, columns: int, rows: int) -> Strip:
         columns, rows = min(columns, kitty.MAX_CELLS), min(rows, kitty.MAX_CELLS)
@@ -188,6 +191,98 @@ class Image(Widget):
     def on_resize(self) -> None:
         self._halfblock = None
         self.refresh()
+
+    def on_mount(self) -> None:
+        if self.protocol in OVERLAY:
+            _Painter.for_app(self.app).widgets.add(self)
+
+    # Overlay protocols: painted at the cursor after each frame ---------------------------
+
+    def _overlay_paint(self, screen, update) -> str:
+        """Codes to (re)paint the visible part, if it moved or its cells were redrawn."""
+        visible = self._visible(screen)
+        if visible is None:
+            hide = self._overlay_hide()
+            self._painted = None
+            return hide
+        if visible == self._painted and not _touched(update, visible):
+            return ""
+        self._painted = visible
+        try:
+            return self._overlay_codes(visible)
+        except Exception:
+            return ""  # never break the app's drawing over a picture
+
+    def _visible(self, screen) -> tuple[int, int, int, int] | None:
+        if not self.is_attached or self.screen is not screen or self.app.screen is not screen:
+            return None
+        try:
+            geometry = screen._compositor.find_widget(self)
+        except Exception:
+            return None
+        content = self.content_region
+        visible = geometry.clip.intersection(content)
+        if visible.width <= 0 or visible.height <= 0:
+            return None
+        return visible.x, visible.y, visible.width, visible.height
+
+    def _overlay_canvas(self) -> tuple[PILImage, tuple[int, int]]:
+        """The picture fitted (aspect kept, centred) into the widget's cells, as RGBA the
+        exact pixel size of those cells, so any group of cells is a clean crop."""
+        from PIL import Image as Pillow
+
+        columns, rows = self.content_size
+        cell_width, cell_height = cell_size()
+        key = (columns, rows, cell_width, cell_height)
+        if self._canvas is None or self._canvas[0] != key:
+            box = (columns * cell_width, rows * cell_height)
+            scale = min(box[0] / self.image_width, box[1] / self.image_height)
+            size = (max(1, round(self.image_width * scale)), max(1, round(self.image_height * scale)))
+            picture = self.image.convert("RGBA").resize(size, Pillow.Resampling.LANCZOS)
+            canvas = Pillow.new("RGBA", box, (0, 0, 0, 0))
+            canvas.paste(picture, ((box[0] - size[0]) // 2, (box[1] - size[1]) // 2))
+            self._canvas = (key, canvas)
+            if self.protocol == "kitty-direct" and self._sent_box is not None:
+                self._write(kitty.delete(self._image_id))  # the old size's data
+                _registry.remove(self._image_id)
+                self._sent_box = None
+        return self._canvas[1], (cell_width, cell_height)
+
+    def _overlay_codes(self, visible: tuple[int, int, int, int]) -> str:
+        x, y, width, height = visible
+        content = self.content_region
+        canvas, (cell_width, cell_height) = self._overlay_canvas()
+        crop = ((x - content.x) * cell_width, (y - content.y) * cell_height, width * cell_width, height * cell_height)
+        move = f"\x1b[{y + 1};{x + 1}H"
+        if self.protocol == "kitty-direct":
+            codes = ""
+            if self._sent_box is None:
+                png = _png(canvas)
+                size = canvas.width * canvas.height * 4
+                codes += "".join(kitty.delete(old) for old in _registry.make_room(size, keep=self._image_id))
+                codes += kitty.transmit(self._image_id, png)
+                _registry.add(self._image_id, size, self)
+                self._sent_box = canvas.size
+            _registry.touch(self._image_id)
+            return codes + move + kitty.place_here(self._image_id, width, height, crop)
+        key = (self.protocol, crop, canvas.size)
+        if self._crop_cache is None or self._crop_cache[0] != key:
+            left, top, crop_width, crop_height = crop
+            piece = canvas.crop((left, top, left + crop_width, top + crop_height))
+            if self.protocol == "sixel":
+                # Whole bands of six pixels only: a partial band would reach the row below
+                # (and at the bottom of the screen, scroll it).
+                piece = piece.crop((0, 0, crop_width, crop_height - crop_height % 6))
+                code = sixel.encode(piece)
+            else:
+                code = iterm2.inline(_png(piece), width, height)
+            self._crop_cache = (key, code)
+        return move + self._crop_cache[1]
+
+    def _overlay_hide(self) -> str:
+        if self.protocol == "kitty-direct" and self._painted is not None:
+            return kitty.delete_placement(self._image_id)
+        return ""  # Sixel and iTerm2 pictures live in their cells: Textual redraws over them
 
     # Kitty: sending --------------------------------------------------------------------
 
@@ -239,7 +334,9 @@ class Image(Widget):
         self._sent_box = self._placed = None
 
     def on_unmount(self) -> None:
-        if self._sent_box is not None:
+        if self.protocol in OVERLAY:
+            _Painter.for_app(self.app).widgets.discard(self)
+        if self._sent_box is not None and self.protocol in ("kitty", "kitty-direct"):
             self._write(kitty.delete(self._image_id))
         _registry.remove(self._image_id)
         self._sent_box = self._placed = None
@@ -250,6 +347,57 @@ class Image(Widget):
             if _capabilities.tmux:
                 codes = _through_tmux(codes)
             driver.write(codes)
+            driver.flush()
+
+
+OVERLAY = ("iterm2", "kitty-direct", "sixel")
+"""Protocols that paint at the cursor, after Textual has drawn the frame."""
+
+
+def _png(picture) -> bytes:
+    buffer = io.BytesIO()
+    picture.save(buffer, format="PNG", compress_level=1)
+    return buffer.getvalue()
+
+
+def _touched(update, visible: tuple[int, int, int, int]) -> bool:
+    """Did this frame redraw any of these cells (erasing what was painted there)?"""
+    from textual._compositor import ChopsUpdate, LayoutUpdate
+
+    x, y, width, height = visible
+    if isinstance(update, ChopsUpdate):
+        return any(y <= line < y + height and start < x + width and end > x for line, start, end in update.spans)
+    if isinstance(update, LayoutUpdate):
+        region = update.region
+        return region.x < x + width and region.right > x and region.y < y + height and region.bottom > y
+    return True
+
+
+class _Painter:
+    """Paints the overlay pictures of one app after each frame it draws."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+        self.widgets: set[Image] = set()
+        self._display = app._display
+        app._display = self._display_and_paint
+
+    @classmethod
+    def for_app(cls, app) -> "_Painter":
+        painter = getattr(app, "_cellpix_painter", None)
+        if painter is None:
+            painter = app._cellpix_painter = cls(app)
+        return painter
+
+    def _display_and_paint(self, screen, renderable) -> None:
+        self._display(screen, renderable)
+        if renderable is None or not self.widgets or getattr(self.app, "_batch_count", 0):
+            return
+        codes = "".join(widget._overlay_paint(screen, renderable) for widget in list(self.widgets))
+        driver = getattr(self.app, "_driver", None)
+        if codes and driver is not None:
+            # Inside a synchronized update, cursor saved and restored around the painting.
+            driver.write("\x1b[?2026h\x1b7" + codes + "\x1b8\x1b[?2026l")
             driver.flush()
 
 

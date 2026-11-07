@@ -62,6 +62,29 @@ def place(image_id: int, columns: int, rows: int, placement_id: int = 1) -> str:
     return command({"a": "p", "U": 1, "i": image_id, "p": placement_id, "c": columns, "r": rows, "q": 2})
 
 
+def place_here(
+    image_id: int,
+    columns: int,
+    rows: int,
+    source: tuple[int, int, int, int] | None = None,
+    placement_id: int = 1,
+) -> str:
+    """A placement at the cursor (for terminals without placeholders), over ``columns x
+    rows`` cells, showing the ``source`` rectangle (x, y, width, height in pixels) of
+    the image. The cursor stays put (``C=1``); the same ids replace an earlier one."""
+    _check_size(columns, rows)
+    keys: dict[str, object] = {"a": "p", "i": image_id, "p": placement_id, "c": columns, "r": rows}
+    if source is not None:
+        keys.update(zip("xywh", source))
+    keys.update({"C": 1, "q": 2})
+    return command(keys)
+
+
+def delete_placement(image_id: int, placement_id: int = 1) -> str:
+    """Remove one placement, keeping the image's data for the next one (``d=i``)."""
+    return command({"a": "d", "d": "i", "i": image_id, "p": placement_id, "q": 2})
+
+
 def delete(image_id: int) -> str:
     """Delete an image's placements and free its data (``d=I``)."""
     return command({"a": "d", "d": "I", "i": image_id, "q": 2})
