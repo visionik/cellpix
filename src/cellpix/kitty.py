@@ -75,6 +75,21 @@ def frame(
     return "".join(codes)
 
 
+def edit(image_id: int, png: bytes, x: int, y: int, *, frame: int = 1, chunk_bytes: int = CHUNK_BYTES) -> str:
+    """Overwrite part of a frame in place: the PNG's pixels at (x, y) of frame ``frame``
+    (``a=f`` with ``r``; ``X=1`` replaces rather than blends). For live pictures, only
+    the part that changed is sent."""
+    data = base64.standard_b64encode(png).decode("ascii")
+    chunks = [data[start : start + chunk_bytes] for start in range(0, len(data), chunk_bytes)] or [""]
+    first = {"a": "f", "i": image_id, "r": frame, "x": x, "y": y, "f": 100, "X": 1, "q": 2}
+    if len(chunks) == 1:
+        return command(first, chunks[0])
+    codes = [command({**first, "m": 1}, chunks[0])]
+    codes += [command({"a": "f", "m": 1, "q": 2}, chunk) for chunk in chunks[1:-1]]
+    codes.append(command({"a": "f", "m": 0, "q": 2}, chunks[-1]))
+    return "".join(codes)
+
+
 def animate(image_id: int, *, run: bool | None = None, frame: int | None = None, gap: int | None = None) -> str:
     """Control an animation (``a=a``): set a frame's gap (``frame`` + ``gap``), and/or
     run it looping forever (``run=True``) or stop it (``run=False``)."""
