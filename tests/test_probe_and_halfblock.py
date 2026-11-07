@@ -28,6 +28,8 @@ def test_real_answers(monkeypatch):
     assert rex.image_budget == 8 * 1024 * 1024  # under Rex's 10 MB
     kitty_terminal = _from("kitty", environment_name="rex")  # TERM_PROGRAM inherited: XTVERSION wins
     assert (kitty_terminal.protocol, kitty_terminal.terminal, kitty_terminal.version) == ("kitty", "kitty", "0.50.0")
+    ghostty = _from("ghostty")
+    assert (ghostty.protocol, ghostty.terminal, ghostty.version, ghostty.cell_size) == ("kitty", "ghostty", "1.4.0", (8, 17))
     wezterm = _from("wezterm")
     assert wezterm.terminal == "wezterm" and wezterm.supported == {"kitty-direct", "iterm2", "sixel"}
     assert wezterm.protocol == "iterm2"  # no Unicode placeholders known: the best overlay
