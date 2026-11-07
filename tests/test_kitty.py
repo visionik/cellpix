@@ -53,3 +53,14 @@ def test_id_colour_and_new_ids():
     for _ in range(200):
         image_id = kitty.new_image_id()
         assert 0x100 <= image_id <= 0xFFFFFF  # fits the colour, never zero
+
+
+def test_codes_go_through_tmux_one_by_one():
+    from cellpix.textual import _through_tmux
+
+    codes = kitty.place(42, 10, 3) + kitty.delete(42)
+    wrapped = _through_tmux(codes)
+    assert wrapped.count("\x1bPtmux;") == 2
+    assert wrapped == "".join(
+        "\x1bPtmux;" + code.replace("\x1b", "\x1b\x1b") + "\x1b\\" for code in (kitty.place(42, 10, 3), kitty.delete(42))
+    )

@@ -124,7 +124,9 @@ class Image(Widget):
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
         self.image = image
-        self.protocol = protocol or _capabilities.protocol
+        wanted = protocol or _capabilities.protocol
+        # Overlay protocols (iterm2, sixel, kitty-direct) aren't drawn yet: half blocks.
+        self.protocol = wanted if wanted in ("kitty", "halfblock", "off") else "halfblock"
         self.image_width, self.image_height = image.size
         self._image_id = kitty.new_image_id()
         self._sent_box: tuple[int, int] | None = None  # pixel box the sent copy was made for
@@ -245,5 +247,15 @@ class Image(Widget):
     def _write(self, codes: str) -> None:
         driver = getattr(self.app, "_driver", None)
         if driver is not None:
+            if _capabilities.tmux:
+                codes = _through_tmux(codes)
             driver.write(codes)
             driver.flush()
+
+
+def _through_tmux(codes: str) -> str:
+    """Each graphics escape code wrapped for tmux's passthrough (one per code: tmux
+    limits how much one passthrough sequence may carry)."""
+    from cellpix.probe import _wrap
+
+    return "".join(_wrap(code + "\x1b\\", tmux=True) for code in codes.split("\x1b\\") if code)
