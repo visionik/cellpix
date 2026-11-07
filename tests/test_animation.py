@@ -41,13 +41,18 @@ def test_frames_are_whole_pictures_with_gaps():
 
 def test_which_terminals_play_animations(monkeypatch):
     monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
-    assert Capabilities("kitty", terminal="kitty").animation
-    assert not Capabilities("kitty", terminal="rex").animation  # not known to: still
-    assert Capabilities("iterm2", terminal="wezterm").animation
-    assert not Capabilities("sixel", terminal="foot").animation
-    monkeypatch.setenv("CELLPIX_ANIMATION", "1")
-    assert Capabilities("kitty", terminal="rex").animation
-    assert not Capabilities("sixel", terminal="foot").animation  # Sixel can't, whatever
+    assert Capabilities("kitty", terminal="kitty", version="0.50.0").animation == "native"
+    assert Capabilities("kitty", terminal="ghostty", version="1.4.0").animation == "native"
+    assert Capabilities("kitty", terminal="ghostty", version="1.3.1").animation == ""  # no a=f yet
+    assert Capabilities("kitty", terminal="rex").animation == "stepped"  # we step the frames
+    assert Capabilities("kitty", terminal="iterm2", version="3.7.7").animation == ""
+    assert Capabilities("iterm2", terminal="wezterm").animation == "native"
+    assert Capabilities("sixel", terminal="foot").animation == ""
+    monkeypatch.setenv("CELLPIX_ANIMATION", "native")
+    assert Capabilities("kitty", terminal="rex").animation == "native"
+    assert Capabilities("sixel", terminal="foot").animation == ""  # Sixel can't, whatever
+    monkeypatch.setenv("CELLPIX_ANIMATION", "0")
+    assert Capabilities("kitty", terminal="kitty").animation == ""
 
 
 class _App(App):
@@ -80,7 +85,7 @@ async def _run(capabilities, **options):
 
 
 async def test_kitty_plays_the_animation():
-    widget, sent = await _run(Capabilities("kitty", (8, 16), terminal="kitty"))
+    widget, sent = await _run(Capabilities("kitty", (8, 16), terminal="kitty", version="0.50.0"))
     image_id = widget._image_id
     assert widget.animated
     assert sent.count(f"a=f,i={image_id}") == 2  # frames 2 and 3
@@ -88,9 +93,9 @@ async def test_kitty_plays_the_animation():
 
 
 async def test_still_where_the_terminal_does_not_animate_or_when_asked():
-    widget, sent = await _run(Capabilities("kitty", (8, 16), terminal="rex"))
+    widget, sent = await _run(Capabilities("kitty", (8, 16), terminal="ghostty", version="1.3.1"))
     assert not widget.animated and "a=f," not in sent
-    widget, sent = await _run(Capabilities("kitty", (8, 16), terminal="kitty"), animate=False)
+    widget, sent = await _run(Capabilities("kitty", (8, 16), terminal="kitty", version="0.50.0"), animate=False)
     assert not widget.animated and "a=f," not in sent
 
 
@@ -101,3 +106,27 @@ async def test_iterm2_sends_a_gif_when_fully_visible():
     payload = re.search(r"1337;File=[^:]*:([^\x07]*)\x07", sent).group(1)
     assert base64.b64decode(payload)[:6] in (b"GIF89a", b"GIF87a")
     assert widget.animated
+
+
+async def test_rex_steps_through_the_frames_itself():
+    ct.configure(Capabilities("kitty", (8, 16), terminal="rex"))
+    widget = ct.Image(_gif(gaps=(40, 40, 40)))
+    written = []
+    async with _App(widget, written).run_test() as pilot:
+        await pilot.pause(0.6)
+        sent = "".join(written)
+    ct.configure(Capabilities("halfblock"))
+    image_id = widget._image_id
+    assert widget.animated and "a=a," not in sent  # nothing for the terminal to play
+    assert sent.count(f"a=f,i={image_id},r=1,f=100,X=1") >= 3  # frame 1 overwritten, again and again
+
+
+async def test_iterm2_uses_its_own_gifs_for_moving_pictures_only():
+    supported = frozenset({"kitty", "kitty-direct", "iterm2", "sixel"})
+    ct.configure(Capabilities("kitty", (8, 16), terminal="iterm2", version="3.7.7", supported=supported))
+    try:
+        assert ct.Image(_gif()).protocol == "iterm2"
+        assert ct.Image(PILImage.new("RGB", (8, 8))).protocol == "kitty"  # still: placeholders
+        assert ct.Image(_gif(), animate=False).protocol == "kitty"
+    finally:
+        ct.configure(Capabilities("halfblock"))

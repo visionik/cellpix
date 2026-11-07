@@ -53,12 +53,20 @@ def transmit(image_id: int, png: bytes, *, chunk_bytes: int = CHUNK_BYTES) -> st
     return "".join(codes)
 
 
-def frame(image_id: int, png: bytes, gap: int, *, chunk_bytes: int = CHUNK_BYTES) -> str:
-    """Add an animation frame (``a=f``): a whole PNG shown for ``gap`` milliseconds. Every
-    chunk of a frame carries ``a=f``."""
+def frame(
+    image_id: int, png: bytes, gap: int = 0, *, replace: int | None = None, chunk_bytes: int = CHUNK_BYTES
+) -> str:
+    """Add an animation frame (``a=f``): a whole PNG shown for ``gap`` milliseconds; or,
+    with ``replace=N``, overwrite frame N's pixels in place. Every chunk carries ``a=f``."""
     data = base64.standard_b64encode(png).decode("ascii")
     chunks = [data[start : start + chunk_bytes] for start in range(0, len(data), chunk_bytes)] or [""]
-    first = {"a": "f", "i": image_id, "f": 100, "X": 1, "z": max(1, gap), "q": 2}
+    first: dict[str, object] = {"a": "f", "i": image_id}
+    if replace is not None:
+        first["r"] = replace
+    first.update({"f": 100, "X": 1})
+    if replace is None:
+        first["z"] = max(1, gap)
+    first["q"] = 2
     if len(chunks) == 1:
         return command(first, chunks[0])
     codes = [command({**first, "m": 1}, chunks[0])]

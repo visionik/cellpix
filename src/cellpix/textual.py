@@ -144,11 +144,20 @@ class Image(Widget):
         self._painted: tuple[int, int, int, int] | None = None  # visible region, screen cells
         self._canvas: tuple[tuple[int, int, int, int], PILImage] | None = None
         self._crop_cache: tuple[tuple, str] | None = None
-        # Animation: played by the terminal itself, where it can.
-        wants = _animate if animate is None else animate
-        self._animating = wants and frames.is_animated(image) and _plays_animation(self.protocol)
+        # Animation: played by the terminal where it can, else stepped through by us.
+        wants = (_animate if animate is None else animate) and frames.is_animated(image)
+        mode = _animation_mode(self.protocol) if wants else ""
+        if wants and not mode and protocol is None and _better_for_animation():
+            # e.g. iTerm2: placeholders for still pictures, its own GIFs for moving ones.
+            self.protocol, mode = "iterm2", "native"
+        if mode == "stepped" and self.protocol != "kitty":
+            mode = ""  # stepping is for placeholder images only
+        self._animation = mode
+        self._animating = bool(mode)
         self._frames: tuple[tuple, list] | None = None  # (key, [(canvas frame, gap ms)])
         self._paused = False
+        self._steps: list[tuple[bytes, int]] = []  # stepped animation: encoded frames
+        self._step_index = 0
 
     @property
     def animated(self) -> bool:
@@ -218,13 +227,25 @@ class Image(Widget):
             self.set_interval(0.5, self._pause_when_hidden)
 
     def _pause_when_hidden(self) -> None:
-        """Stop the terminal playing an animation nobody can see; start it again on return."""
+        """Stop an animation nobody can see; start it again on return."""
         if self._sent_box is None:
             return
         hidden = self._visible(self.screen) is None if self.is_attached else True
         if hidden != self._paused:
             self._paused = hidden
-            self._write(kitty.animate(self._image_id, run=not hidden))
+            if self._animation == "native":
+                self._write(kitty.animate(self._image_id, run=not hidden))
+
+    def _step(self) -> None:
+        """Stepped animation: show the next frame by overwriting frame 1's pixels."""
+        if not self.is_attached or not self._steps:
+            return
+        gap = self._steps[self._step_index][1]
+        if self._sent_box is not None and not self._paused:
+            self._step_index = (self._step_index + 1) % len(self._steps)
+            png, gap = self._steps[self._step_index]
+            self._write(kitty.frame(self._image_id, png, replace=1))
+        self.set_timer(max(gap, frames.MIN_GAP) / 1000, self._step)
 
     # Overlay protocols: painted at the cursor after each frame ---------------------------
 
@@ -387,12 +408,17 @@ class Image(Widget):
         codes = [kitty.delete(old) for old in _registry.make_room(decoded, keep=self._image_id)]
         if self._sent_box is not None:
             codes.append(kitty.delete(self._image_id))  # replacing its data needs a delete
-        if len(encoded) > 1:
+        if len(encoded) > 1 and self._animation == "native":
             codes.append(_kitty_animation(self._image_id, encoded))
         else:
             codes.append(kitty.transmit(self._image_id, encoded[0][0]))
         codes.append(kitty.place(self._image_id, columns, rows))
         self._paused = False
+        if len(encoded) > 1 and self._animation == "stepped":
+            first = not self._steps
+            self._steps, self._step_index = encoded, 0
+            if first:
+                self.set_timer(encoded[0][1] / 1000, self._step)
         self._write("".join(codes))
         _registry.add(self._image_id, decoded, self)
         self._sent_box, self._placed, self._sending = box, (columns, rows), False
@@ -423,9 +449,14 @@ OVERLAY = ("iterm2", "kitty-direct", "sixel")
 """Protocols that paint at the cursor, after Textual has drawn the frame."""
 
 
-def _plays_animation(protocol: str) -> bool:
-    """Does the terminal play animations in this protocol?"""
-    return Capabilities(protocol, terminal=_capabilities.terminal).animation
+def _animation_mode(protocol: str) -> str:
+    """How animations move in this protocol here: ``native``, ``stepped`` or ``""``."""
+    return Capabilities(protocol, terminal=_capabilities.terminal, version=_capabilities.version).animation
+
+
+def _better_for_animation() -> bool:
+    """The terminal can't animate in its usual protocol but plays iTerm2 GIFs (iTerm2)."""
+    return "iterm2" in _capabilities.supported and not _capabilities.tmux
 
 
 def _kitty_animation(image_id: int, encoded: list) -> str:

@@ -44,10 +44,14 @@ Checked by eye (2026-11-07): Kitty 0.50.0, Ghostty 1.4.0, iTerm2 3.7.7 and Rex d
 the Kitty graphics query but doesn't draw placeholders properly, so it gets iTerm2
 inline images (or Kitty placements, or Sixel, which all work there)."""
 
-KITTY_ANIMATION = {"kitty"}
-"""Terminals (XTVERSION name) known to play Kitty animations (``a=f`` frames, ``a=a``).
-``CELLPIX_ANIMATION=1``/``0`` overrides it. iTerm2 inline images always animate (a GIF
-is played by the terminal itself)."""
+KITTY_ANIMATION = {"kitty": (0,), "ghostty": (1, 4)}
+"""Terminals (XTVERSION name: lowest version) that play Kitty animations themselves
+(``a=f`` frames, ``a=a``). Checked by eye (2026-11-07): Kitty 0.50, Ghostty 1.4.0 yes;
+Ghostty 1.3.1 lacks ``a=f``; iTerm2 3.7.7 and Rex don't play them."""
+
+STEPPED_ANIMATION = {"rex"}
+"""Terminals without Kitty animation playback whose image pixels can be replaced in place
+(``a=f`` editing frame 1): cellpix steps through the frames itself."""
 
 BUDGETS = {"rex": 8 * 1024 * 1024}
 """Image memory to stay under, where a terminal keeps less than usual (Rex: 10 MB)."""
@@ -84,14 +88,23 @@ class Capabilities:
     """Escape codes for the terminal must go through tmux's passthrough."""
 
     @property
-    def animation(self) -> bool:
-        """Can pictures move: does the terminal play animations in the chosen protocol?"""
-        override = os.environ.get("CELLPIX_ANIMATION", "")
-        if override in ("0", "1"):
-            return override == "1" and self.protocol in ("kitty", "kitty-direct", "iterm2")
+    def animation(self) -> str:
+        """How pictures move in the chosen protocol: ``native`` (the terminal plays them),
+        ``stepped`` (cellpix replaces the frames itself), or ``""`` (they stay still).
+        ``CELLPIX_ANIMATION=native|stepped|0`` overrides it for Kitty terminals."""
         if self.protocol == "iterm2":
-            return True
-        return self.protocol in ("kitty", "kitty-direct") and self.terminal in KITTY_ANIMATION
+            return "native"  # the terminal plays a GIF
+        if self.protocol not in ("kitty", "kitty-direct"):
+            return ""
+        override = os.environ.get("CELLPIX_ANIMATION", "")
+        if override in ("native", "stepped"):
+            return override
+        if override == "0":
+            return ""
+        minimum = KITTY_ANIMATION.get(self.terminal)
+        if minimum is not None and _version(self.version) >= minimum:
+            return "native"
+        return "stepped" if self.terminal in STEPPED_ANIMATION else ""
 
 
 def detect(timeout: float = 0.5, tty_path: str = "/dev/tty") -> Capabilities:
@@ -155,6 +168,12 @@ def capabilities_from(
             return Capabilities(protocol, cell, name, budget, _why(protocol, name), frozenset(supported), version, tmux)
     reason = "no graphics answer" if _DEVICE_ATTRIBUTES.search(answer) else "the terminal didn't answer"
     return Capabilities("halfblock", cell, name, budget, reason, frozenset(supported), version, tmux)
+
+
+def _version(text: str) -> tuple[int, ...]:
+    """``1.4.0`` -> (1, 4, 0); anything unreadable counts as new (an unknown build)."""
+    numbers = re.findall(r"\d+", text.split("-")[0])
+    return tuple(int(number) for number in numbers) if numbers else (999,)
 
 
 def _why(protocol: str, name: str) -> str:
