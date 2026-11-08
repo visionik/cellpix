@@ -57,4 +57,4 @@ runs a live picture with its frame rate and cost.
   whose library keeps at most 10 MB) deletes pictures not drawn lately, and they're sent
   again if they come back into view.
 - Inside tmux (with `allow-passthrough on`), Kitty placeholders only; elsewhere half blocks.
-- Not yet (phase 3): Windows (a console-API probe, then Sixel for Windows Terminal).
+- On Windows the probe asks through the console API; terminals that answer with Sixel (Windows Terminal 1.22+) get Sixel.
