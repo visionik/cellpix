@@ -21,6 +21,7 @@ import io
 import math
 import os
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from rich.color import Color
@@ -55,6 +56,17 @@ def configure(capabilities: Capabilities | None = None, *, animate: bool = True)
 
 def capabilities() -> Capabilities:
     return _capabilities
+
+
+def set_cell_size(width: int, height: int) -> bool:
+    """Say a cell's pixel size, once it's known: a host may only learn it after the app
+    starts. Returns whether it changed."""
+    global _capabilities
+    size = (max(1, width), max(1, height))
+    if _capabilities.cell_size == size:
+        return False
+    _capabilities = replace(_capabilities, cell_size=size)
+    return True
 
 
 def animations_play() -> bool:
@@ -129,6 +141,9 @@ class Image(Widget):
     }
     """
 
+    live = False
+    """Does this picture keep changing? A host watches ``image`` for new frames."""
+
     RESEND_GROWTH = 1.25
     """Send a sharper copy when the box grows by more than this."""
 
@@ -138,14 +153,16 @@ class Image(Widget):
         *,
         protocol: str | None = None,
         animate: bool | None = None,
+        alt: str = "",
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
         self.image = image
+        self.alt = alt
         wanted = protocol or _capabilities.protocol
-        self.protocol = wanted if wanted in ("kitty", "halfblock", "off", *OVERLAY) else "halfblock"
+        self.protocol = wanted if wanted in ("kitty", "halfblock", "off", "host", *OVERLAY) else "halfblock"
         self.image_width, self.image_height = image.size
         self._image_id = kitty.new_image_id()
         self._sent_box: tuple[int, int] | None = None  # pixel box the sent copy was made for
@@ -215,7 +232,7 @@ class Image(Widget):
             return self._kitty_line(y, columns, rows)
         if self.protocol == "halfblock":
             return self._halfblock_lines(columns, rows)[y]
-        return Strip.blank(columns, self.rich_style)  # overlay: painted after the frame
+        return Strip.blank(columns, self.rich_style)  # overlay, painted after; host, drawn by it
 
     def _kitty_line(self, y: int, columns: int, rows: int) -> Strip:
         columns, rows = min(columns, kitty.MAX_CELLS), min(rows, kitty.MAX_CELLS)
