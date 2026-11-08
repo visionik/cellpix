@@ -382,11 +382,15 @@ async def test_stepping_starts_before_every_frame_is_made(monkeypatch):
         seen = []  # (step index, frames made so far, all made?)
         async with _App(widget, []).run_test() as pilot:
             started = time.monotonic()
-            while time.monotonic() - started < 3:
+            # Until it has looped once every frame is made (10 s at most: slow CI runners).
+            while time.monotonic() - started < 10:
                 await pilot.pause(0.02)
                 # (Without handing frames over as they're made, they arrive all at once.)
                 complete = getattr(widget, "_steps_complete", bool(widget._steps))
                 seen.append((widget._step_index, len(widget._steps), complete))
+                after = [index for index, _, done in seen if done]
+                if any(later < earlier for earlier, later in zip(after, after[1:])):
+                    break
         ct.configure(Capabilities("halfblock"))
         assert widget.animated, found.protocol
         playing_early = [index for index, made_so_far, complete in seen[:25] if not complete and index > 0]
