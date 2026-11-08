@@ -317,3 +317,44 @@ async def test_wezterm_moves_animations_as_sixel():
         assert ct.Image(_gif()).protocol == "iterm2" and not ct.Image(_gif()).animated
     finally:
         ct.configure(Capabilities("halfblock"))
+
+
+def test_animations_play_says_what_the_widget_will_do(monkeypatch):
+    """animations_play(): the choice Image makes for each animated picture, including a
+    move to another protocol (iTerm2 GIFs, Sixel). CELLPIX_ANIMATION=0 stills them all."""
+    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    cases = [
+        (Capabilities("kitty", terminal="kitty", version="0.50.0"), True),  # native
+        (Capabilities("halfblock"), True),  # stepped
+        (Capabilities("sixel", terminal="foot"), True),
+        (Capabilities("kitty-direct", terminal="wezterm", supported=frozenset({"kitty-direct"})), False),
+        # iTerm2 images only, in a terminal not known to play their GIFs (and no Sixel):
+        (Capabilities("iterm2", terminal="vscode", supported=frozenset({"iterm2"})), False),
+        # WezTerm: moving pictures go to Sixel.
+        (Capabilities("iterm2", terminal="wezterm", supported=frozenset({"iterm2", "sixel", "kitty-direct"})), True),
+    ]
+    try:
+        for found, plays in cases:
+            ct.configure(found)
+            assert ct.animations_play() is plays, found
+            assert ct.Image(_gif()).animated is plays, found
+        ct.configure(Capabilities("kitty", terminal="kitty", version="0.50.0"), animate=False)
+        assert not ct.animations_play()
+    finally:
+        ct.configure(Capabilities("halfblock"))
+
+
+def test_cellpix_animation_0_is_not_undone_by_another_protocol(monkeypatch):
+    """The bug: with CELLPIX_ANIMATION=0, iTerm2 still played animated pictures as its
+    own GIFs, and WezTerm as Sixel."""
+    monkeypatch.setenv("CELLPIX_ANIMATION", "0")
+    iterm = Capabilities("kitty", terminal="iterm2", version="3.7.7", supported=frozenset({"kitty", "kitty-direct", "iterm2", "sixel"}))
+    wezterm = Capabilities("iterm2", terminal="wezterm", supported=frozenset({"iterm2", "sixel", "kitty-direct"}))
+    try:
+        for found in (iterm, wezterm):
+            ct.configure(found)
+            widget = ct.Image(_gif())
+            assert widget.protocol == found.protocol and not widget.animated
+            assert not ct.animations_play()
+    finally:
+        ct.configure(Capabilities("halfblock"))

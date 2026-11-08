@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import math
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -54,6 +55,17 @@ def configure(capabilities: Capabilities | None = None, *, animate: bool = True)
 
 def capabilities() -> Capabilities:
     return _capabilities
+
+
+def animations_play() -> bool:
+    """Do animated pictures (GIF, WebP, APNG) move here? The same choice :class:`Image`
+    makes for each one, which may take them to another protocol the terminal has (iTerm2
+    GIFs in iTerm2, Sixel in WezTerm), for telling a user or an agent what to expect.
+    False with ``configure(animate=False)`` or ``CELLPIX_ANIMATION=0``."""
+    if not _animate:
+        return False
+    mode = _capabilities.animation
+    return bool(mode) or _better_for_animation(mode) is not None
 
 
 def cell_size() -> tuple[int, int]:
@@ -667,7 +679,7 @@ def _better_for_animation(mode: str) -> tuple[str, str] | None:
     can't (or only steps it): (protocol, animation mode), or None. Never past a protocol
     forced with ``CELLPIX_PROTOCOL``, nor inside tmux (placeholders only there)."""
     found = _capabilities
-    if found.tmux or found.reason == "CELLPIX_PROTOCOL":
+    if found.tmux or found.reason == "CELLPIX_PROTOCOL" or os.environ.get("CELLPIX_ANIMATION") == "0":
         return None
     if "iterm2" in found.supported and found.terminal in ITERM2_GIFS:
         return "iterm2", "native"  # the terminal plays a GIF itself
