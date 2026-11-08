@@ -137,11 +137,10 @@ def test_windows_probe_asks_the_console_and_reads_the_answers(tmp_path):
     )
     terminal = winpty.PTY(100, 30)
     assert terminal.spawn(sys.executable, f'"{script}"', None, None)
-    seen = ""
 
     def play_the_terminal() -> None:
-        nonlocal seen
-        answered = False
+        """Answers every query as it comes, as a terminal does (the console asks too, at
+        its start, and keeps the first device attributes for itself)."""
         while True:
             try:
                 text = terminal.read(blocking=True)
@@ -149,10 +148,7 @@ def test_windows_probe_asks_the_console_and_reads_the_answers(tmp_path):
                 return
             if not text and not terminal.isalive():
                 return
-            seen += text
-            if not answered and "\x1b[>0q" in seen:
-                answered = True
-                terminal.write("\x1b[6;20;10t\x1b[?62;4;22c")  # a cell size, and Sixel
+            terminal.write("\x1b[6;20;10t" * text.count("\x1b[16t") + "\x1b[?62;4;22c" * text.count("\x1b[c"))
 
     threading.Thread(target=play_the_terminal, daemon=True).start()
     deadline = time.monotonic() + 30
