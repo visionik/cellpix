@@ -1,6 +1,7 @@
-# cellpix
+# pixcell
 
-Images in terminal cells, MIT-licensed:
+Images in terminal cells, MIT-licensed. (Formerly *cellpix*; renamed in 0.3.0, with its
+`CELLPIX_*` environment variables now `PIXCELL_*`.)
 
 - **Kitty graphics** with Unicode placeholders, for Kitty, Ghostty, iTerm2 (3.7+) and Rex. An image is
   sent to the terminal once, then drawn as ordinary coloured text, so it scrolls, clips
@@ -10,25 +11,25 @@ Images in terminal cells, MIT-licensed:
   after each frame, cropped to what's visible.
 - **Half blocks** (`▀`, two pixels per cell) for any terminal with 24-bit colour.
 - **Animated pictures** (GIF, WebP, APNG): played by the terminal where it can (Kitty,
-  Ghostty 1.4+, Rex, iTerm2), otherwise stepped through by cellpix, a frame at a time
+  Ghostty 1.4+, Rex, iTerm2), otherwise stepped through by pixcell, a frame at a time
   (other placeholder terminals, Sixel, half blocks). In WezTerm, which shows iTerm2 GIFs
-  still, moving pictures go to Sixel. `cellpix.textual.animations_play()` says whether
-  they move here; `CELLPIX_ANIMATION=0` keeps them still.
-- **Live pictures** (`cellpix.live.LiveImage`): push frames from any thread (a browser
+  still, moving pictures go to Sixel. `pixcell.textual.animations_play()` says whether
+  they move here; `PIXCELL_ANIMATION=0` keeps them still.
+- **Live pictures** (`pixcell.live.LiveImage`): push frames from any thread (a browser
   view, a camera, a game); only what changed is sent where the terminal allows, and
   clicks come back in the frame's own pixels.
 - A **probe** that asks the terminal which it supports, and its cell size in pixels.
-- A **Textual** widget (`pip install cellpix[textual]`).
+- A **Textual** widget (`pip install pixcell[textual]`).
 
 ```python
-import cellpix.textual
+import pixcell.textual
 from PIL import Image
 
-cellpix.textual.configure()   # probe the terminal, before the app starts
+pixcell.textual.configure()   # probe the terminal, before the app starts
 
 class Viewer(App):
     def compose(self):
-        yield cellpix.textual.Image(Image.open("photo.png"))
+        yield pixcell.textual.Image(Image.open("photo.png"))
 
 Viewer().run()
 ```
@@ -36,14 +37,14 @@ Viewer().run()
 A live picture:
 
 ```python
-from cellpix.live import LiveImage
+from pixcell.live import LiveImage
 
 live = LiveImage((640, 400), fps=30)   # in compose(), like any widget
 live.push(frame)                       # a Pillow image, from any thread: the newest wins
 ```
 
-`CELLPIX_PROTOCOL=kitty|iterm2|kitty-direct|sixel|halfblock|off` overrides the probe.
-`python -m cellpix [image ...]` shows pictures; `python -m cellpix live [fps] [scroll]`
+`PIXCELL_PROTOCOL=kitty|iterm2|kitty-direct|sixel|halfblock|off` overrides the probe.
+`python -m pixcell [image ...]` shows pictures; `python -m pixcell live [fps] [scroll]`
 runs a live picture with its frame rate and cost.
 
 ## Notes

@@ -15,7 +15,7 @@ edits aren't known to redraw, whole frames are swapped between two image ids ins
 Overlay protocols (Sixel, iTerm2, Kitty placements) and half blocks repaint the widget.
 
 Sixel is encoded on the main thread, each frame. Checked by eye (2026-11-07) in WezTerm
-20240203, a detailed page scrolling (``python -m cellpix live 30 scroll``): 30 fps at
+20240203, a detailed page scrolling (``python -m pixcell live 30 scroll``): 30 fps at
 560x384 pixels, ~25 ms of main thread and ~112 KB a frame. Transparent pixels aren't
 painted, so a frame with transparency (or a letterbox that moves) would leave the last
 frame's pixels there; frames without it, as here, are fine.
@@ -34,15 +34,15 @@ from typing import TYPE_CHECKING
 from textual import events
 from textual.message import Message
 
-from cellpix import kitty
-from cellpix.textual import OVERLAY, Image, _png, _registry, capabilities, cell_size
+from pixcell import kitty
+from pixcell.textual import OVERLAY, Image, _png, _registry, capabilities, cell_size
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
 
 
 class LiveImage(Image):
-    """A picture that keeps changing. Size it with CSS like :class:`cellpix.textual.Image`."""
+    """A picture that keeps changing. Size it with CSS like :class:`pixcell.textual.Image`."""
 
     class Clicked(Message):
         """The picture was clicked, at (x, y) in the frame's own pixels."""

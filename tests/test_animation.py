@@ -6,9 +6,9 @@ import re
 from PIL import Image as PILImage
 from textual.app import App, ComposeResult
 
-import cellpix.textual as ct
-from cellpix import frames, kitty
-from cellpix.probe import Capabilities
+import pixcell.textual as ct
+from pixcell import frames, kitty
+from pixcell.probe import Capabilities
 
 
 def _gif(count=3, gaps=(80, 0, 200), size=(40, 30)):
@@ -40,7 +40,7 @@ def test_frames_are_whole_pictures_with_gaps():
 
 
 def test_which_terminals_play_animations(monkeypatch):
-    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    monkeypatch.delenv("PIXCELL_ANIMATION", raising=False)
     assert Capabilities("kitty", terminal="kitty", version="0.50.0").animation == "native"
     assert Capabilities("kitty", terminal="ghostty", version="1.4.0").animation == "native"
     assert Capabilities("kitty", terminal="ghostty", version="1.3.1").animation == "stepped"  # no a=f yet
@@ -52,10 +52,10 @@ def test_which_terminals_play_animations(monkeypatch):
     assert Capabilities("sixel", terminal="foot").animation == "stepped"  # repainted per frame
     assert Capabilities("halfblock").animation == "stepped"
     assert Capabilities("off").animation == ""
-    monkeypatch.setenv("CELLPIX_ANIMATION", "native")
+    monkeypatch.setenv("PIXCELL_ANIMATION", "native")
     assert Capabilities("kitty", terminal="ghostty", version="1.3.1").animation == "native"
     assert Capabilities("sixel", terminal="foot").animation == "stepped"  # never native
-    monkeypatch.setenv("CELLPIX_ANIMATION", "0")
+    monkeypatch.setenv("PIXCELL_ANIMATION", "0")
     assert Capabilities("kitty", terminal="kitty").animation == ""
     assert Capabilities("sixel", terminal="foot").animation == ""
     assert Capabilities("halfblock").animation == ""
@@ -243,7 +243,7 @@ async def _stepped_output(capabilities, seconds=0.8):
 
 
 async def test_half_blocks_step_through_the_frames(monkeypatch):
-    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    monkeypatch.delenv("PIXCELL_ANIMATION", raising=False)
     ct.configure(Capabilities("halfblock", (8, 16)))
     widget = ct.Image(_gif(gaps=(40, 40, 40)))
     seen = set()
@@ -257,7 +257,7 @@ async def test_half_blocks_step_through_the_frames(monkeypatch):
 
 
 async def test_sixel_steps_through_the_frames_painting_each_whole(monkeypatch):
-    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    monkeypatch.delenv("PIXCELL_ANIMATION", raising=False)
     widget, sent = await _stepped_output(Capabilities("sixel", (8, 16), terminal="foot"))
     assert widget.animated and len(widget._steps) == 3
     codes = re.findall(r"\x1bP0;1;0q.*?\x1b\\", sent, re.S)
@@ -269,7 +269,7 @@ async def test_sixel_steps_through_the_frames_painting_each_whole(monkeypatch):
 
 
 async def test_stepping_can_be_turned_off(monkeypatch):
-    monkeypatch.setenv("CELLPIX_ANIMATION", "0")
+    monkeypatch.setenv("PIXCELL_ANIMATION", "0")
     widget, sent = await _stepped_output(Capabilities("halfblock", (8, 16)), seconds=0.3)
     assert not widget.animated and not widget._steps
 
@@ -305,15 +305,15 @@ def test_two_threads_can_go_through_one_animated_picture():
 
 async def test_wezterm_moves_animations_as_sixel():
     """WezTerm draws still pictures as iTerm2 images but doesn't play their GIFs: moving
-    ones go to Sixel, stepped. A protocol forced with CELLPIX_PROTOCOL is kept."""
+    ones go to Sixel, stepped. A protocol forced with PIXCELL_PROTOCOL is kept."""
     supported = frozenset({"kitty-direct", "iterm2", "sixel"})
     try:
         ct.configure(Capabilities("iterm2", (7, 16), terminal="wezterm", supported=supported))
         assert (ct.Image(_gif()).protocol, ct.Image(_gif())._animation) == ("sixel", "stepped")
         assert ct.Image(PILImage.new("RGB", (8, 8))).protocol == "iterm2"  # still
-        ct.configure(Capabilities("sixel", (7, 16), terminal="wezterm", reason="CELLPIX_PROTOCOL", supported=supported))
+        ct.configure(Capabilities("sixel", (7, 16), terminal="wezterm", reason="PIXCELL_PROTOCOL", supported=supported))
         assert (ct.Image(_gif()).protocol, ct.Image(_gif())._animation) == ("sixel", "stepped")
-        ct.configure(Capabilities("iterm2", (7, 16), terminal="wezterm", reason="CELLPIX_PROTOCOL", supported=supported))
+        ct.configure(Capabilities("iterm2", (7, 16), terminal="wezterm", reason="PIXCELL_PROTOCOL", supported=supported))
         assert ct.Image(_gif()).protocol == "iterm2" and not ct.Image(_gif()).animated
     finally:
         ct.configure(Capabilities("halfblock"))
@@ -321,8 +321,8 @@ async def test_wezterm_moves_animations_as_sixel():
 
 def test_animations_play_says_what_the_widget_will_do(monkeypatch):
     """animations_play(): the choice Image makes for each animated picture, including a
-    move to another protocol (iTerm2 GIFs, Sixel). CELLPIX_ANIMATION=0 stills them all."""
-    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    move to another protocol (iTerm2 GIFs, Sixel). PIXCELL_ANIMATION=0 stills them all."""
+    monkeypatch.delenv("PIXCELL_ANIMATION", raising=False)
     cases = [
         (Capabilities("kitty", terminal="kitty", version="0.50.0"), True),  # native
         (Capabilities("halfblock"), True),  # stepped
@@ -344,10 +344,10 @@ def test_animations_play_says_what_the_widget_will_do(monkeypatch):
         ct.configure(Capabilities("halfblock"))
 
 
-def test_cellpix_animation_0_is_not_undone_by_another_protocol(monkeypatch):
-    """The bug: with CELLPIX_ANIMATION=0, iTerm2 still played animated pictures as its
+def test_pixcell_animation_0_is_not_undone_by_another_protocol(monkeypatch):
+    """The bug: with PIXCELL_ANIMATION=0, iTerm2 still played animated pictures as its
     own GIFs, and WezTerm as Sixel."""
-    monkeypatch.setenv("CELLPIX_ANIMATION", "0")
+    monkeypatch.setenv("PIXCELL_ANIMATION", "0")
     iterm = Capabilities("kitty", terminal="iterm2", version="3.7.7", supported=frozenset({"kitty", "kitty-direct", "iterm2", "sixel"}))
     wezterm = Capabilities("iterm2", terminal="wezterm", supported=frozenset({"iterm2", "sixel", "kitty-direct"}))
     try:
@@ -367,7 +367,7 @@ async def test_stepping_starts_before_every_frame_is_made(monkeypatch):
     once every frame is there."""
     import time
 
-    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    monkeypatch.delenv("PIXCELL_ANIMATION", raising=False)
     made = frames.each_encoded_frame
 
     def slowly(*args, **options):  # 40 ms a frame: 24 frames take about 1 s

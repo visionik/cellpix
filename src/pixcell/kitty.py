@@ -16,7 +16,7 @@ from __future__ import annotations
 import base64
 import random
 
-from cellpix._diacritics import DIACRITICS
+from pixcell._diacritics import DIACRITICS
 
 PLACEHOLDER = "\U0010eeee"
 """The character each placeholder cell holds."""

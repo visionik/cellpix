@@ -1,9 +1,9 @@
 from PIL import Image as PILImage
 from textual.app import App, ComposeResult
 
-import cellpix.textual as ct
-from cellpix import kitty
-from cellpix.probe import Capabilities
+import pixcell.textual as ct
+from pixcell import kitty
+from pixcell.probe import Capabilities
 
 
 class Recorder:

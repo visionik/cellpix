@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from cellpix import halfblock, probe
+from pixcell import halfblock, probe
 
 
 def test_cell_size_prefers_csi_16t_then_window_then_ioctl():
@@ -22,7 +22,7 @@ def _from(name, **kwargs):
 
 def test_real_answers(monkeypatch):
     """Recorded from the real terminals (raw answers to the probe's queries)."""
-    monkeypatch.delenv("CELLPIX_PLACEHOLDERS", raising=False)
+    monkeypatch.delenv("PIXCELL_PLACEHOLDERS", raising=False)
     rex = _from("rex", environment_name="rex")
     assert (rex.protocol, rex.terminal, rex.cell_size) == ("kitty", "rex", (8, 16))
     assert rex.image_budget == 8 * 1024 * 1024  # under Rex's 10 MB
@@ -41,14 +41,14 @@ def test_real_answers(monkeypatch):
 
 
 def test_placeholder_override(monkeypatch):
-    monkeypatch.setenv("CELLPIX_PLACEHOLDERS", "1")
+    monkeypatch.setenv("PIXCELL_PLACEHOLDERS", "1")
     assert _from("wezterm").protocol == "kitty"
-    monkeypatch.setenv("CELLPIX_PLACEHOLDERS", "0")
+    monkeypatch.setenv("PIXCELL_PLACEHOLDERS", "0")
     assert _from("rex").protocol == "kitty-direct"
 
 
 def test_tmux_uses_placeholders_only(monkeypatch):
-    monkeypatch.delenv("CELLPIX_PLACEHOLDERS", raising=False)
+    monkeypatch.delenv("PIXCELL_PLACEHOLDERS", raising=False)
     assert _from("rex", tmux=True).protocol == "kitty"
     wezterm = _from("wezterm", tmux=True)
     assert wezterm.protocol == "halfblock" and "no Kitty placeholders" in wezterm.reason
@@ -69,13 +69,13 @@ def test_xtversion_names():
 
 
 def test_forced_protocol(monkeypatch):
-    monkeypatch.setenv("CELLPIX_PROTOCOL", "off")
+    monkeypatch.setenv("PIXCELL_PROTOCOL", "off")
     assert probe.detect().protocol == "off"
 
 
 def test_detect_without_a_tty_is_halfblock(monkeypatch):
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.delenv("CELLPIX_PROTOCOL", raising=False)
+    monkeypatch.delenv("PIXCELL_PROTOCOL", raising=False)
     assert probe.detect(tty_path="/nonexistent/tty").protocol == "halfblock"
 
 

@@ -13,13 +13,13 @@ Environment variables are only a fallback: a program started from one terminal i
 another inherits the first one's ``TERM_PROGRAM``.
 
 Kitty's Unicode placeholders can't be queried, so whether a terminal draws them comes
-from :data:`PLACEHOLDERS` (by XTVERSION name), or ``CELLPIX_PLACEHOLDERS=1``/``0``.
+from :data:`PLACEHOLDERS` (by XTVERSION name), or ``PIXCELL_PLACEHOLDERS=1``/``0``.
 
 Inside tmux the graphics query, XTVERSION and cell size go to the outer terminal through
 tmux's passthrough (it needs ``set -g allow-passthrough on``). Only placeholder images are
 offered there: they're text, which tmux redraws itself.
 
-``CELLPIX_PROTOCOL`` forces a protocol (one of :data:`PROTOCOLS`).
+``PIXCELL_PROTOCOL`` forces a protocol (one of :data:`PROTOCOLS`).
 """
 
 from __future__ import annotations
@@ -30,11 +30,11 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-from cellpix import kitty
+from pixcell import kitty
 
 PROTOCOLS = ("kitty", "iterm2", "kitty-direct", "sixel", "halfblock", "off")
 """Best first. ``kitty`` draws with Unicode placeholders; ``kitty-direct``, ``iterm2``
-and ``sixel`` paint at the cursor, after each frame (see :mod:`cellpix.textual`)."""
+and ``sixel`` paint at the cursor, after each frame (see :mod:`pixcell.textual`)."""
 
 PLACEHOLDERS = {"kitty", "ghostty", "rex", "iterm2"}
 """Terminals (XTVERSION name, lower case) known to draw Kitty Unicode placeholders.
@@ -48,7 +48,7 @@ KITTY_ANIMATION = {"kitty": (0,), "ghostty": (1, 4), "rex": (0,)}
 """Terminals (XTVERSION name: lowest version) that play Kitty animations themselves
 (``a=f`` frames, ``a=a``). Checked by eye (2026-11-07): Kitty 0.50, Ghostty 1.4.0 and Rex
 yes; Ghostty 1.3.1 lacks ``a=f``; iTerm2 3.7.7 doesn't (it plays GIFs in its own protocol).
-Elsewhere with placeholders, cellpix steps through the frames itself."""
+Elsewhere with placeholders, pixcell steps through the frames itself."""
 
 ITERM2_GIFS = {"iterm2"}
 """Terminals (XTVERSION name) that play animated GIFs sent as iTerm2 inline images.
@@ -102,7 +102,7 @@ class Capabilities:
         ``r``)? Where Kitty animations play natively (the same frame commands). Checked
         by eye: Rex and Kitty 0.50 yes; iTerm2 3.7.7 no (the picture stays on its first
         frame). Elsewhere live pictures swap whole frames instead."""
-        override = os.environ.get("CELLPIX_EDITS", "")
+        override = os.environ.get("PIXCELL_EDITS", "")
         if override in ("0", "1"):
             return override == "1"
         minimum = KITTY_ANIMATION.get(self.terminal)
@@ -111,11 +111,11 @@ class Capabilities:
     @property
     def animation(self) -> str:
         """How pictures move in the chosen protocol: ``native`` (the terminal plays them),
-        ``stepped`` (cellpix shows each frame itself: placeholder terminals without
+        ``stepped`` (pixcell shows each frame itself: placeholder terminals without
         playback, Sixel, half blocks), or ``""`` (they stay still).
-        ``CELLPIX_ANIMATION=native|stepped|0`` overrides it for Kitty terminals; ``0``
+        ``PIXCELL_ANIMATION=native|stepped|0`` overrides it for Kitty terminals; ``0``
         also stills Sixel and half blocks."""
-        override = os.environ.get("CELLPIX_ANIMATION", "")
+        override = os.environ.get("PIXCELL_ANIMATION", "")
         if self.protocol == "iterm2":
             plays = self.terminal in ITERM2_GIFS and override != "0"
             return "native" if plays else ""  # the terminal plays a GIF
@@ -138,9 +138,9 @@ class Capabilities:
 def detect(timeout: float = 0.5, tty_path: str = "/dev/tty") -> Capabilities:
     """Probe the terminal. Never raises: anything unexpected gives half blocks."""
     environment_name = _name_from_environment()
-    forced = os.environ.get("CELLPIX_PROTOCOL", "").lower()
+    forced = os.environ.get("PIXCELL_PROTOCOL", "").lower()
     if forced in ("halfblock", "off"):
-        return Capabilities(forced, None, environment_name, _budget(environment_name), "CELLPIX_PROTOCOL")
+        return Capabilities(forced, None, environment_name, _budget(environment_name), "PIXCELL_PROTOCOL")
     tmux = bool(os.environ.get("TMUX"))
     if os.name != "posix":
         return Capabilities("halfblock", None, environment_name, DEFAULT_BUDGET, "not a POSIX terminal")
@@ -190,7 +190,7 @@ def capabilities_from(
     else:
         supported_here = supported
     if forced in PROTOCOLS:
-        return Capabilities(forced, cell, name, budget, "CELLPIX_PROTOCOL", frozenset(supported), version, tmux)
+        return Capabilities(forced, cell, name, budget, "PIXCELL_PROTOCOL", frozenset(supported), version, tmux)
     for protocol in PROTOCOLS:
         if protocol in supported_here:
             return Capabilities(protocol, cell, name, budget, _why(protocol, name), frozenset(supported), version, tmux)
@@ -214,7 +214,7 @@ def _why(protocol: str, name: str) -> str:
 
 
 def _placeholders(name: str) -> bool:
-    override = os.environ.get("CELLPIX_PLACEHOLDERS", "")
+    override = os.environ.get("PIXCELL_PLACEHOLDERS", "")
     if override in ("0", "1"):
         return override == "1"
     return name in PLACEHOLDERS
@@ -305,5 +305,5 @@ def _cell_size(
     return None
 
 
-if __name__ == "__main__":  # python -m cellpix.probe
+if __name__ == "__main__":  # python -m pixcell.probe
     print(detect(), file=sys.stderr)

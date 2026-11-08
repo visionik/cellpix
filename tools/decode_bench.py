@@ -23,7 +23,7 @@ import zlib
 
 from PIL import Image, ImageDraw
 
-from cellpix import kitty
+from pixcell import kitty
 
 FRAMES, RUNS, SIZE = 30, 3, (640, 400)
 DA1 = re.compile(rb"\x1b\[\?[\d;]*c")
@@ -125,7 +125,7 @@ def main() -> None:
             prepared[(name, kind)] = (payload.encode("ascii"), ids)
     fd = os.open("/dev/tty", os.O_RDWR)
     saved = termios.tcgetattr(fd)
-    from cellpix.probe import detect
+    from pixcell.probe import detect
 
     found = detect()  # XTVERSION: TERM_PROGRAM is inherited across terminals
     lines = [f"terminal: {found.terminal} {found.version}  frames: {FRAMES} x {SIZE[0]}x{SIZE[1]}, best of {RUNS}"]

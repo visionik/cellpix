@@ -1,6 +1,6 @@
 [project]
-name = "cellpix"
-version = "0.2.0"
+name = "pixcell"
+version = "0.3.0"
 description = "Images in terminal cells: Kitty graphics (Unicode placeholders), iTerm2 images, Sixel and half blocks, still, animated or live, with Textual widgets."
 readme = "README.md"
 license = "MIT"
@@ -24,7 +24,7 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cellpix"]
+packages = ["src/pixcell"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

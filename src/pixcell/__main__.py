@@ -1,4 +1,4 @@
-"""``python -m cellpix [image ...]``: show images in a scrolling Textual view.
+"""``python -m pixcell [image ...]``: show images in a scrolling Textual view.
 
 Each image is drawn twice: with the protocol the probe found, and with half blocks.
 Without arguments it draws a test gradient.
@@ -17,7 +17,7 @@ def _gradient():
     for x in range(640):
         draw.line([(x, 0), (x, 359)], fill=(x * 255 // 639, 120, 255 - x * 255 // 639))
     draw.ellipse((220, 80, 420, 280), fill=(250, 250, 250), outline=(0, 0, 0), width=6)
-    draw.text((20, 20), "cellpix", fill=(255, 255, 255))
+    draw.text((20, 20), "pixcell", fill=(255, 255, 255))
     return image
 
 
@@ -57,7 +57,7 @@ def _tall_page(width: int):
             return ImageFont.load_default()
 
     random.seed(7)
-    words = ("terminal pixels frame image kitty cellpix render scroll update browser page text code "
+    words = ("terminal pixels frame image kitty pixcell render scroll update browser page text code "
              "placeholder diff zlib encode decode widget textual console agent stream click").split()
     page = Image.new("RGB", (width, 3600), (250, 250, 247))
     draw = ImageDraw.Draw(page)
@@ -87,7 +87,7 @@ def _tall_page(width: int):
 
 
 def live_demo() -> None:
-    """``python -m cellpix live``: a generated 640x400 scene at 15 fps. Click to drop a
+    """``python -m pixcell live``: a generated 640x400 scene at 15 fps. Click to drop a
     marker at that pixel; scroll to change the orbit's speed."""
     import math
     import os
@@ -98,8 +98,8 @@ def live_demo() -> None:
     from textual.app import App, ComposeResult
     from textual.widgets import Footer, Static
 
-    import cellpix.textual as ct
-    from cellpix.live import LiveImage
+    import pixcell.textual as ct
+    from pixcell.live import LiveImage
 
     found = ct.configure()
     width, height = 640, 400
@@ -170,7 +170,7 @@ def live_demo() -> None:
                 f"{live.bytes_sent / frames / 1024:.1f} KB/frame, {live.busy_seconds / frames * 1000:.1f} ms/frame main thread"
             )
             self.query_one("#stats", Static).update(line)
-            if path := os.environ.get("CELLPIX_LIVE_STATS"):  # for terminals we can't read back
+            if path := os.environ.get("PIXCELL_LIVE_STATS"):  # for terminals we can't read back
                 with open(path, "w") as out:
                     out.write(f"{found.protocol} {found.terminal} {found.version} {found.frame_format} "
                               f"{'edits' if found.edits else 'swap'}: {line}\n")
@@ -190,7 +190,7 @@ def main() -> None:
     from textual.containers import VerticalScroll
     from textual.widgets import Footer, Static
 
-    import cellpix.textual as ct
+    import pixcell.textual as ct
 
     found = ct.configure()
     images = [(path, PILImage.open(path)) for path in sys.argv[1:]] or [
