@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from pixcell import halfblock, probe
+from pixcell import halfblock, probe, terminal_facts
 
 
 def test_cell_size_prefers_csi_16t_then_window_then_ioctl():
@@ -25,7 +25,7 @@ def test_real_answers(monkeypatch):
     monkeypatch.delenv("PIXCELL_PLACEHOLDERS", raising=False)
     rex = _from("rex", environment_name="rex")
     assert (rex.protocol, rex.terminal, rex.cell_size) == ("kitty", "rex", (8, 16))
-    assert rex.image_budget == 8 * 1024 * 1024  # under Rex's 10 MB
+    assert rex.image_budget == 8_000_000  # 80% of Rex's 10 MB (terminals.toml: kitty.storage_bytes)
     kitty_terminal = _from("kitty", environment_name="rex")  # TERM_PROGRAM inherited: XTVERSION wins
     assert (kitty_terminal.protocol, kitty_terminal.terminal, kitty_terminal.version) == ("kitty", "kitty", "0.50.0")
     ghostty = _from("ghostty")
@@ -62,10 +62,10 @@ def test_tmux_passthrough_wrapping():
 
 
 def test_xtversion_names():
-    assert probe._split_version("kitty(0.50.0)") == ("kitty", "0.50.0")
-    assert probe._split_version("WezTerm 20240203-110809-5046fc22") == ("wezterm", "20240203-110809-5046fc22")
-    assert probe._split_version("iTerm2 3.6.5") == ("iterm2", "3.6.5")
-    assert probe._split_version("ghostty 1.3.1") == ("ghostty", "1.3.1")
+    assert terminal_facts.parse_xtversion("kitty(0.50.0)") == ("kitty", "0.50.0")
+    assert terminal_facts.parse_xtversion("WezTerm 20240203-110809-5046fc22") == ("wezterm", "20240203-110809-5046fc22")
+    assert terminal_facts.parse_xtversion("iTerm2 3.6.5") == ("iterm2", "3.6.5")
+    assert terminal_facts.parse_xtversion("ghostty 1.3.1") == ("ghostty", "1.3.1")
 
 
 def test_forced_protocol(monkeypatch):
@@ -87,3 +87,30 @@ def test_halfblock_cells_are_upper_and_lower_pixels():
     assert len(rows) == 2 and len(rows[0]) == 2
     assert rows[0][0] == ((255, 0, 0), (0, 0, 255))
     assert rows[1][1] == (None, None)  # transparent: the terminal's colours show
+
+
+def test_facts_come_from_the_shared_file():
+    """What can't be asked comes from terminals.toml (github.com/visionik/terminal-facts),
+    vendored unchanged; versions and OS rows stack as SPEC.md says."""
+    from pixcell.probe import Capabilities
+
+    rows = terminal_facts.load()  # the vendored copy checks out against the spec
+    assert {row.id for row in rows} >= {"kitty", "ghostty", "ghostty-1.3", "rex", "wezterm", "iterm2"}
+    assert Capabilities("kitty", terminal="ghostty", version="1.3.1").fact("kitty.animation") is False
+    # Ghostty dev builds after 1.3.1 (e.g. 1.3.2-main) have a=f: they play animations now.
+    assert Capabilities("kitty", terminal="ghostty", version="1.3.2-main+22f100c").animation == "native"
+    assert Capabilities("kitty", terminal="foot").fact("kitty.animation", "unknown") == "unknown"
+    assert Capabilities("kitty", terminal="kitty").image_budget == probe.DEFAULT_BUDGET  # 320 MiB: capped
+    assert probe._budget("kitty", "0.50.0") == probe.DEFAULT_BUDGET and probe._budget("foot", "") == probe.DEFAULT_BUDGET
+
+
+def test_name_from_environment_uses_the_shared_matchers(monkeypatch):
+    for variable in ("KITTY_WINDOW_ID", "WEZTERM_EXECUTABLE", "GHOSTTY_RESOURCES_DIR", "REX_SESSION", "ITERM_SESSION_ID", "TERM_PROGRAM"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("TERM", "xterm-kitty")
+    assert probe._name_from_environment() == "kitty"
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    assert probe._name_from_environment() == "iterm2"
+    monkeypatch.setenv("TERM_PROGRAM", "SomethingNew")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    assert probe._name_from_environment() == "somethingnew"  # unknown: TERM_PROGRAM as before

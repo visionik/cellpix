@@ -12,8 +12,11 @@ Asks the terminal directly, on its tty, in one round trip:
 Environment variables are only a fallback: a program started from one terminal in
 another inherits the first one's ``TERM_PROGRAM``.
 
-Kitty's Unicode placeholders can't be queried, so whether a terminal draws them comes
-from :data:`PLACEHOLDERS` (by XTVERSION name), or ``PIXCELL_PLACEHOLDERS=1``/``0``.
+What can't be asked comes from the shared terminal facts (``terminals.toml``, from
+github.com/visionik/terminal-facts, vendored by ``tools/update_facts.py``): whether the
+terminal draws Kitty Unicode placeholders, plays animations, redraws in-place edits,
+plays iTerm2 GIFs, which frame format it takes fastest, how much image memory it keeps.
+``PIXCELL_PLACEHOLDERS=1``/``0`` overrides the placeholder fact.
 
 Inside tmux the graphics query, XTVERSION and cell size go to the outer terminal through
 tmux's passthrough (it needs ``set -g allow-passthrough on``). Only placeholder images are
@@ -29,35 +32,20 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
+from typing import Any
 
-from pixcell import kitty
+from pixcell import kitty, terminal_facts
 
 PROTOCOLS = ("kitty", "iterm2", "kitty-direct", "sixel", "halfblock", "off")
 """Best first. ``kitty`` draws with Unicode placeholders; ``kitty-direct``, ``iterm2``
 and ``sixel`` paint at the cursor, after each frame (see :mod:`pixcell.textual`)."""
 
-PLACEHOLDERS = {"kitty", "ghostty", "rex", "iterm2"}
-"""Terminals (XTVERSION name, lower case) known to draw Kitty Unicode placeholders.
-
-Checked by eye (2026-11-07): Kitty 0.50.0, Ghostty 1.4.0, iTerm2 3.7.7 and Rex draw them
-(only used when the terminal also answers the Kitty graphics query: older iTerm2 doesn't). WezTerm 20240203 answers
-the Kitty graphics query but doesn't draw placeholders properly, so it gets iTerm2
-inline images (or Kitty placements, or Sixel, which all work there)."""
-
-KITTY_ANIMATION = {"kitty": (0,), "ghostty": (1, 4), "rex": (0,)}
-"""Terminals (XTVERSION name: lowest version) that play Kitty animations themselves
-(``a=f`` frames, ``a=a``). Checked by eye (2026-11-07): Kitty 0.50, Ghostty 1.4.0 and Rex
-yes; Ghostty 1.3.1 lacks ``a=f``; iTerm2 3.7.7 doesn't (it plays GIFs in its own protocol).
-Elsewhere with placeholders, pixcell steps through the frames itself."""
-
-ITERM2_GIFS = {"iterm2"}
-"""Terminals (XTVERSION name) that play animated GIFs sent as iTerm2 inline images.
-Checked by eye (2026-11-07): iTerm2 yes; WezTerm 20240203 shows the first frame only.
-Elsewhere an iTerm2 picture stays still (or moves as Sixel, where the terminal has it)."""
-
-BUDGETS = {"rex": 8 * 1024 * 1024}
-"""Image memory to stay under, where a terminal keeps less than usual (Rex: 10 MB)."""
+BUDGET_SHARE = 0.8
+"""The share of a terminal's image memory (``kitty.storage_bytes``) to use before evicting
+pictures: Rex keeps 10 MB, so pixcell stays under 8 MB there."""
 DEFAULT_BUDGET = 64 * 1024 * 1024
+"""Image memory to stay under where a terminal's limit is unknown (or larger)."""
 
 _GRAPHICS_OK = re.compile(rb"\x1b_Gi=(\d+);OK\x1b\\")
 _DEVICE_ATTRIBUTES = re.compile(rb"\x1b\[\?([\d;]*)c")
@@ -89,24 +77,28 @@ class Capabilities:
     tmux: bool = False
     """Escape codes for the terminal must go through tmux's passthrough."""
 
+    def fact(self, key: str, default: Any = None) -> Any:
+        """A shared terminal fact about this terminal (``kitty.frame_edit``...), or
+        ``default`` when it's unknown (or the terminal is)."""
+        found = _facts_for(self.terminal, self.version)
+        return found.get(key, default) if found is not None else default
+
     @property
     def frame_format(self) -> str:
         """How to send pictures that change often: ``pixels`` (raw, zlib-compressed) or
-        ``png``. Measured (tools/decode_bench.py): raw + zlib is cheapest for Ghostty,
-        Rex, Kitty and WezTerm to take in; iTerm2 takes raw pixels slowly, PNG quickly."""
-        return "png" if self.terminal == "iterm2" else "pixels"
+        ``png``, by the ``kitty.fastest_format`` fact (tools/decode_bench.py measures it:
+        iTerm2 takes PNG fastest, the rest raw + zlib)."""
+        return "png" if self.fact("kitty.fastest_format") == "png" else "pixels"
 
     @property
     def edits(self) -> bool:
         """Does the terminal redraw a placeholder image edited in place (``a=f`` with
-        ``r``)? Where Kitty animations play natively (the same frame commands). Checked
-        by eye: Rex and Kitty 0.50 yes; iTerm2 3.7.7 no (the picture stays on its first
-        frame). Elsewhere live pictures swap whole frames instead."""
+        ``r``)? The ``kitty.frame_edit`` fact; unknown counts as no. Elsewhere live
+        pictures swap whole frames instead."""
         override = os.environ.get("PIXCELL_EDITS", "")
         if override in ("0", "1"):
             return override == "1"
-        minimum = KITTY_ANIMATION.get(self.terminal)
-        return self.protocol == "kitty" and minimum is not None and _version(self.version) >= minimum
+        return self.protocol == "kitty" and self.fact("kitty.frame_edit") is True
 
     @property
     def animation(self) -> str:
@@ -117,7 +109,7 @@ class Capabilities:
         also stills Sixel and half blocks."""
         override = os.environ.get("PIXCELL_ANIMATION", "")
         if self.protocol == "iterm2":
-            plays = self.terminal in ITERM2_GIFS and override != "0"
+            plays = self.fact("iterm2.gif_animation") is True and override != "0"
             return "native" if plays else ""  # the terminal plays a GIF
         if self.protocol in ("sixel", "halfblock"):
             return "" if override == "0" else "stepped"  # repainted frame by frame
@@ -127,8 +119,7 @@ class Capabilities:
             return override
         if override == "0":
             return ""
-        minimum = KITTY_ANIMATION.get(self.terminal)
-        if minimum is not None and _version(self.version) >= minimum:
+        if self.fact("kitty.animation") is True:
             return "native"
         # Stepping needs nothing but sending and placing images (double-buffered): any
         # placeholder terminal can. Placements at the cursor would flicker: still there.
@@ -140,7 +131,7 @@ def detect(timeout: float = 0.5, tty_path: str = "/dev/tty") -> Capabilities:
     environment_name = _name_from_environment()
     forced = os.environ.get("PIXCELL_PROTOCOL", "").lower()
     if forced in ("halfblock", "off"):
-        return Capabilities(forced, None, environment_name, _budget(environment_name), "PIXCELL_PROTOCOL")
+        return Capabilities(forced, None, environment_name, _budget(environment_name, ""), "PIXCELL_PROTOCOL")
     tmux = bool(os.environ.get("TMUX"))
     if os.name != "posix":
         return Capabilities("halfblock", None, environment_name, DEFAULT_BUDGET, "not a POSIX terminal")
@@ -164,19 +155,22 @@ def capabilities_from(
     """Decide from the terminal's answers (separate from the asking, for tests)."""
     name, version = environment_name, ""
     if match := _XTVERSION.search(answer):
-        name, version = _split_version(match.group(1).decode("utf-8", "replace"))
+        name, version = terminal_facts.parse_xtversion(match.group(1).decode("utf-8", "replace"))
     supported = set()
     if _GRAPHICS_OK.search(answer):
         supported.add("kitty-direct")
-        if _placeholders(name):
+        if _placeholders(name, version):
             supported.add("kitty")
     if _ITERM2_CELL.search(answer) or name == "iterm2":
         supported.add("iterm2")
     if (match := _DEVICE_ATTRIBUTES.search(answer)) and "4" in match.group(1).decode().split(";"):
         supported.add("sixel")
-    # Rex's TIOCGWINSZ pixel sizes can disagree with its escape-code answers.
-    cell = _cell_size(answer, columns, rows, None if name == "rex" else ioctl_pixels)
-    budget = _budget(name)
+    # Some terminals' TIOCGWINSZ pixel sizes disagree with their escape-code answers (Rex).
+    trusted = _facts_for(name, version)
+    if trusted is not None and trusted.get("window.ioctl_pixels") is False:
+        ioctl_pixels = None
+    cell = _cell_size(answer, columns, rows, ioctl_pixels)
+    budget = _budget(name, version)
     if tmux:
         usable = supported & {"kitty"}
         if not usable:
@@ -198,12 +192,6 @@ def capabilities_from(
     return Capabilities("halfblock", cell, name, budget, reason, frozenset(supported), version, tmux)
 
 
-def _version(text: str) -> tuple[int, ...]:
-    """``1.4.0`` -> (1, 4, 0); anything unreadable counts as new (an unknown build)."""
-    numbers = re.findall(r"\d+", text.split("-")[0])
-    return tuple(int(number) for number in numbers) if numbers else (999,)
-
-
 def _why(protocol: str, name: str) -> str:
     return {
         "kitty": f"Kitty graphics with Unicode placeholders ({name})",
@@ -213,35 +201,39 @@ def _why(protocol: str, name: str) -> str:
     }[protocol]
 
 
-def _placeholders(name: str) -> bool:
+@lru_cache(maxsize=1)
+def _facts() -> list[terminal_facts.Row]:
+    return terminal_facts.load()
+
+
+@lru_cache(maxsize=32)
+def _facts_for(name: str, version: str) -> terminal_facts.Terminal | None:
+    """The facts for a terminal by its XTVERSION-style name and version (None if it's
+    not in the file). Names from the environment are the facts' row ids, the same names."""
+    if not name:
+        return None
+    return terminal_facts.identify(_facts(), xtversion=f"{name} {version}".strip(), environ={})
+
+
+def _placeholders(name: str, version: str) -> bool:
     override = os.environ.get("PIXCELL_PLACEHOLDERS", "")
     if override in ("0", "1"):
         return override == "1"
-    return name in PLACEHOLDERS
+    found = _facts_for(name, version)
+    return found is not None and found.get("kitty.placeholders") is True
 
 
-def _budget(name: str) -> int:
-    return BUDGETS.get(name, DEFAULT_BUDGET)
-
-
-def _split_version(text: str) -> tuple[str, str]:
-    """``kitty(0.50.0)``, ``WezTerm 20240203-110809``, ``rex 0.0.17`` -> (name, version)."""
-    if match := re.match(r"\s*([^\s(]+)[\s(]*([^)]*)\)?", text):
-        name = match.group(1).lower()
-        return ("iterm2" if name.startswith("iterm") else name), match.group(2).strip()
-    return text.strip().lower(), ""
+def _budget(name: str, version: str) -> int:
+    found = _facts_for(name, version)
+    storage = found.get("kitty.storage_bytes") if found is not None else None
+    return min(DEFAULT_BUDGET, int(storage * BUDGET_SHARE)) if storage else DEFAULT_BUDGET
 
 
 def _name_from_environment() -> str:
-    """The terminal's name from variables only it sets, then TERM_PROGRAM (inheritable)."""
-    if os.environ.get("KITTY_WINDOW_ID"):
-        return "kitty"
-    if os.environ.get("WEZTERM_EXECUTABLE"):
-        return "wezterm"
-    if os.environ.get("GHOSTTY_RESOURCES_DIR"):
-        return "ghostty"
-    program = os.environ.get("TERM_PROGRAM", "").lower()
-    return "iterm2" if program.startswith("iterm") else program
+    """The terminal's name from the environment, by the facts' matchers (variables only
+    it sets, then TERM_PROGRAM and TERM, which can be inherited); else TERM_PROGRAM."""
+    found = terminal_facts.identify(_facts(), environ=os.environ)
+    return found.id if found is not None else os.environ.get("TERM_PROGRAM", "").lower()
 
 
 def _wrap(codes: str, tmux: bool) -> str:
