@@ -11,7 +11,12 @@ Images in terminal cells, MIT-licensed:
 - **Half blocks** (`▀`, two pixels per cell) for any terminal with 24-bit colour.
 - **Animated pictures** (GIF, WebP, APNG): played by the terminal where it can (Kitty,
   Ghostty 1.4+, Rex, iTerm2), otherwise stepped through by cellpix, a frame at a time
-  (other placeholder terminals, Sixel, half blocks). `CELLPIX_ANIMATION=0` keeps them still.
+  (other placeholder terminals, Sixel, half blocks). In WezTerm, which shows iTerm2 GIFs
+  still, moving pictures go to Sixel. `cellpix.textual.animations_play()` says whether
+  they move here; `CELLPIX_ANIMATION=0` keeps them still.
+- **Live pictures** (`cellpix.live.LiveImage`): push frames from any thread (a browser
+  view, a camera, a game); only what changed is sent where the terminal allows, and
+  clicks come back in the frame's own pixels.
 - A **probe** that asks the terminal which it supports, and its cell size in pixels.
 - A **Textual** widget (`pip install cellpix[textual]`).
 
@@ -28,7 +33,18 @@ class Viewer(App):
 Viewer().run()
 ```
 
-`CELLPIX_PROTOCOL=kitty|halfblock|off` overrides the probe.
+A live picture:
+
+```python
+from cellpix.live import LiveImage
+
+live = LiveImage((640, 400), fps=30)   # in compose(), like any widget
+live.push(frame)                       # a Pillow image, from any thread: the newest wins
+```
+
+`CELLPIX_PROTOCOL=kitty|iterm2|kitty-direct|sixel|halfblock|off` overrides the probe.
+`python -m cellpix [image ...]` shows pictures; `python -m cellpix live [fps] [scroll]`
+runs a live picture with its frame rate and cost.
 
 ## Notes
 

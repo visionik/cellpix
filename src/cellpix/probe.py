@@ -34,7 +34,7 @@ from cellpix import kitty
 
 PROTOCOLS = ("kitty", "iterm2", "kitty-direct", "sixel", "halfblock", "off")
 """Best first. ``kitty`` draws with Unicode placeholders; ``kitty-direct``, ``iterm2``
-and ``sixel`` paint at the cursor (see :mod:`cellpix.overlay`)."""
+and ``sixel`` paint at the cursor, after each frame (see :mod:`cellpix.textual`)."""
 
 PLACEHOLDERS = {"kitty", "ghostty", "rex", "iterm2"}
 """Terminals (XTVERSION name, lower case) known to draw Kitty Unicode placeholders.
