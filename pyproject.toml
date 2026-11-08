@@ -1,6 +1,6 @@
 [project]
 name = "pixcell"
-version = "0.4.0"
+version = "0.4.1"
 description = "Images in terminal cells: Kitty graphics (Unicode placeholders), iTerm2 images, Sixel and half blocks, still, animated or live, with Textual widgets."
 readme = "README.md"
 license = "MIT"
