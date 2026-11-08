@@ -173,6 +173,7 @@ class Image(Widget):
         # escape code; half blocks: RGBA pixels), made for the size in _steps_key.
         self._steps: list[tuple[bytes, int]] = []
         self._steps_key: tuple | None = None
+        self._steps_complete = False  # every frame is in _steps (else more are coming)
         self._step_index = 0
         self._stepping = False  # a step timer is pending
         self._preparing = False  # a worker is encoding frames (Sixel, half blocks)
@@ -274,8 +275,12 @@ class Image(Widget):
         if not self.is_attached or not self._animating or not self._steps:
             return
         if not self._paused and self._step_ready():
-            self._step_index = (self._step_index + 1) % len(self._steps)
-            self._show_step()
+            following = self._step_index + 1
+            # Frames still being made: play what's there, and wait on the newest frame
+            # if playback catches up (round to the start only once they're all made).
+            if following < len(self._steps) or self._steps_complete:
+                self._step_index = following % len(self._steps)
+                self._show_step()
         self._schedule_step()
 
     def _schedule_step(self) -> None:
@@ -351,30 +356,49 @@ class Image(Widget):
                 return picture.tobytes()
 
         def work() -> None:
+            # Frames are handed over as they're made (the first at once, then every
+            # quarter second), so the animation starts before the last is encoded.
+            batch: list[tuple[bytes, int]] = []
+            first, handed, encoded, failed = True, 0.0, 0, False
             try:
-                moving = frames.encoded_frames(self.image, fit, encode)
+                for data, gap, _size in frames.each_encoded_frame(self.image, fit, encode):
+                    encoded += len(data)
+                    if encoded > frames.MAX_ENCODED_BYTES:
+                        failed = True  # too big even encoded: still
+                        break
+                    batch.append((data, gap))
+                    if first or time.monotonic() - handed > STEP_BATCH_SECONDS:
+                        self.app.call_from_thread(self._frames_made, key, batch, first, False, False)
+                        batch, first, handed = [], False, time.monotonic()
             except Exception:
-                moving = None
-            self.app.call_from_thread(self._prepared, key, moving)
+                failed = True
+            self.app.call_from_thread(self._frames_made, key, batch, first, True, failed)
 
         # Later: this is asked for while drawing (render_line, or painting after a frame).
         self.call_later(self.run_worker, work, thread=True, exit_on_error=False)
 
-    def _prepared(self, key: tuple, moving) -> None:
-        self._preparing = False
+    def _frames_made(self, key: tuple, batch: list, first: bool, done: bool, failed: bool) -> None:
+        """More frames from the worker (``first``: the start of a new set, for ``key``)."""
+        if done:
+            self._preparing = False
         if not self.is_attached:
             return
-        if moving is None:
-            self._animating = False  # too long or too big: still
-        else:
-            self._steps, self._steps_key, self._step_strips = moving[0], key, {}
-            self._step_index %= len(self._steps)
+        if first:
+            self._steps, self._steps_key, self._step_strips = [], key, {}
+            self._steps_complete, self._step_index = False, 0
+        self._steps.extend(batch)
+        if done:
+            if failed or len(self._steps) < 2:
+                self._animating, self._steps = False, []  # too long, too big, or still: still
+            else:
+                self._steps_complete = True
+        if self._animating and self._steps:
             self._schedule_step()
         if self.protocol == "halfblock":
             self.refresh()  # its frames, or (if it moved on meanwhile) a new size to prepare
-        elif self._animating and self._steps_key != self._sixel_key():
+        elif done and self._animating and self._steps_key != self._sixel_key():
             self._prepare_steps(self._sixel_key())  # resized while encoding
-        else:
+        elif first or done:
             self._repaint()
 
     def _sixel_key(self) -> tuple:
@@ -593,7 +617,7 @@ class Image(Widget):
         codes.append(kitty.place(self._image_id, columns, rows))
         self._paused = False
         if len(encoded) > 1 and self._animation == "stepped":
-            self._steps, self._step_index = encoded, 0
+            self._steps, self._step_index, self._steps_complete = encoded, 0, True
             self._schedule_step()
         self._write("".join(codes))
         _registry.add(self._image_id, decoded, self)
@@ -628,6 +652,9 @@ OVERLAY = ("iterm2", "kitty-direct", "sixel")
 
 STEPPED = ("kitty", "sixel", "halfblock")
 """Protocols cellpix can animate itself, a frame at a time."""
+
+STEP_BATCH_SECONDS = 0.25
+"""How often a worker encoding frames hands what it has made to the widget."""
 
 HALFBLOCK_CACHE_CELLS = 400_000
 """Half-block animations up to this many cells (frames x cells) keep every frame's

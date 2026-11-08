@@ -358,3 +358,45 @@ def test_cellpix_animation_0_is_not_undone_by_another_protocol(monkeypatch):
             assert not ct.animations_play()
     finally:
         ct.configure(Capabilities("halfblock"))
+
+
+async def test_stepping_starts_before_every_frame_is_made(monkeypatch):
+    """Long animations used to show still until every frame was encoded (3.7 s for a
+    228-frame GIF as Sixel). Frames are now handed over as they're made: playback starts
+    at once, waits on the newest frame if it catches up, and rounds to the start only
+    once every frame is there."""
+    import time
+
+    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    made = frames.each_encoded_frame
+
+    def slowly(*args, **options):  # 40 ms a frame: 24 frames take about 1 s
+        for frame in made(*args, **options):
+            time.sleep(0.04)
+            yield frame
+
+    monkeypatch.setattr(frames, "each_encoded_frame", slowly)
+    for found in (Capabilities("halfblock", (8, 16)), Capabilities("sixel", (8, 16), terminal="foot")):
+        ct.configure(found)
+        widget = ct.Image(_long_gif(24, (40, 30)))  # 80 ms a frame: a round is about 1.9 s
+        seen = []  # (step index, frames made so far, all made?)
+        async with _App(widget, []).run_test() as pilot:
+            started = time.monotonic()
+            # Until it has looped once every frame is made (10 s at most: slow CI runners).
+            while time.monotonic() - started < 10:
+                await pilot.pause(0.02)
+                # (Without handing frames over as they're made, they arrive all at once.)
+                complete = getattr(widget, "_steps_complete", bool(widget._steps))
+                seen.append((widget._step_index, len(widget._steps), complete))
+                after = [index for index, _, done in seen if done]
+                if any(later < earlier for earlier, later in zip(after, after[1:])):
+                    break
+        ct.configure(Capabilities("halfblock"))
+        assert widget.animated, found.protocol
+        playing_early = [index for index, made_so_far, complete in seen[:25] if not complete and index > 0]
+        assert playing_early, found.protocol  # moving within 0.5 s, long before all 24 are made
+        before = [index for index, _, complete in seen if not complete]
+        assert before == sorted(before), found.protocol  # no going back to the start early
+        assert all(index < made_so_far for index, made_so_far, _ in seen if made_so_far), found.protocol
+        after = [index for index, _, complete in seen if complete]
+        assert any(later < earlier for earlier, later in zip(after, after[1:])), found.protocol  # then loops
