@@ -147,3 +147,55 @@ async def test_too_big_to_play_natively_steps_instead():
     sent = "".join(written)
     assert widget.animated and widget._animation == "stepped" and "a=a," not in sent
     assert len(re.findall(r"a=t,f=100", sent)) >= 3
+
+
+def test_encoded_frames_keep_only_the_encoded_copy():
+    image = _gif(count=3, gaps=(80, 0, 200), size=(40, 30))
+    encoded, size, decoded = frames.encoded_frames(image, lambda picture: picture, lambda picture: b"png" * 10)
+    assert [gap for _, gap in encoded] == [80, frames.DEFAULT_GAP, 200] and size == (40, 30)
+    assert decoded == 3 * 40 * 30 * 4  # counted, though none is kept
+    assert all(data == b"png" * 10 for data, _ in encoded)
+    assert image.tell() == 0
+    assert frames.encoded_frames(_gif(), lambda p: p, lambda p: b"x" * 100, max_encoded=150) is None  # too big
+    assert frames.encoded_frames(PILImage.new("RGB", (4, 4)), lambda p: p, lambda p: b"") is None  # still
+
+
+def _long_gif(count, size):
+    """A GIF with ``count`` frames that all differ (Pillow merges identical neighbours)."""
+    pictures = []
+    for index in range(count):
+        picture = PILImage.new("RGB", size, (20, 20, 20))
+        picture.putpixel((index % size[0], (index // size[0]) % size[1]), (255, 255, 255))
+        pictures.append(picture)
+    buffer = io.BytesIO()
+    pictures[0].save(buffer, format="GIF", save_all=True, append_images=pictures[1:], duration=80, loop=0)
+    buffer.seek(0)
+    return PILImage.open(buffer)
+
+
+def test_a_long_animation_is_encoded_not_dropped():
+    """228 frames: over MAX_FRAMES (200), which only limits frames kept decoded."""
+    gif = _long_gif(228, (60, 40))
+    assert gif.n_frames == 228
+    assert frames.frames(gif, lambda picture: picture) is None
+    encoded, _, _ = frames.encoded_frames(gif, lambda picture: picture, lambda picture: b"p")
+    assert len(encoded) == 228
+
+
+async def test_a_long_gif_over_the_terminals_budget_is_stepped_and_reserves_two_frames():
+    """The bug: a 228-frame 350x233 GIF in Rex (8 MB budget) was shown still. Now it's
+    stepped, and only two frames count against the terminal's memory. (Shrunk to a small
+    box, the same GIF fits the budget, and the terminal plays it itself.)"""
+    ct.configure(Capabilities("kitty", (8, 16), terminal="rex", image_budget=8 * 1024 * 1024))
+    widget = ct.Image(_long_gif(228, (350, 233)))
+    widget.styles.width, widget.styles.height = 44, 15  # 352 x 240 px: the GIF at its own size
+    written = []
+    async with _App(widget, written).run_test(size=(80, 30)) as pilot:
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if widget._steps:
+                break
+        reserved = ct._registry.used
+    ct.configure(Capabilities("halfblock"))
+    assert widget.animated and widget._animation == "stepped" and len(widget._steps) == 228
+    assert 0 < reserved <= 2 * 350 * 233 * 4  # two frames at most, not 228 (74 MB)
