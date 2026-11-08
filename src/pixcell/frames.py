@@ -47,9 +47,9 @@ def _decoding(image: "Image"):
     itself, so two widgets showing the same picture (each encoding in a worker) would
     otherwise read each other's frames, or break Pillow mid-frame."""
     with _locks_lock:
-        lock = image.__dict__.get("_cellpix_lock")
+        lock = image.__dict__.get("_pixcell_lock")
         if lock is None:
-            lock = image.__dict__["_cellpix_lock"] = threading.Lock()
+            lock = image.__dict__["_pixcell_lock"] = threading.Lock()
     with lock:
         yield
 

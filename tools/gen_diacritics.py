@@ -1,4 +1,4 @@
-"""Generate src/cellpix/_diacritics.py: the row/column diacritics for Kitty's Unicode
+"""Generate src/pixcell/_diacritics.py: the row/column diacritics for Kitty's Unicode
 placeholders.
 
 Kitty's graphics protocol numbers placeholder rows and columns with combining marks:
@@ -20,7 +20,7 @@ EXCLUDED = {
     0x0300, 0x0301, 0x0302, 0x0303, 0x0304, 0x0306, 0x0307, 0x0308, 0x0309, 0x030A,
     0x030B, 0x030C, 0x030F, 0x0311, 0x0313, 0x0314, 0x0342, 0x0653, 0x0654,
 }
-OUT = Path(__file__).resolve().parent.parent / "src" / "cellpix" / "_diacritics.py"
+OUT = Path(__file__).resolve().parent.parent / "src" / "pixcell" / "_diacritics.py"
 
 
 def diacritics(unicode_data: str) -> list[int]:

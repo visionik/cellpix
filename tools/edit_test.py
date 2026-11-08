@@ -14,8 +14,8 @@ from PIL import Image as PILImage
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
-import cellpix.textual as ct
-from cellpix import kitty
+import pixcell.textual as ct
+from pixcell import kitty
 
 SIZE, SQUARE, STEP = (320, 160), 24, 8
 BACKGROUND = (30, 60, 110)

@@ -3,8 +3,8 @@ elsewhere.
 
 Probe the terminal before the app starts (the probe needs the tty to itself)::
 
-    import cellpix.textual
-    cellpix.textual.configure()          # runs cellpix.probe.detect()
+    import pixcell.textual
+    pixcell.textual.configure()          # runs pixcell.probe.detect()
     MyApp().run()
 
 then use :class:`Image` like any widget. With Kitty graphics the widget draws Unicode
@@ -29,13 +29,13 @@ from rich.style import Style
 from textual.strip import Strip
 from textual.widget import Widget
 
-from cellpix import frames, halfblock, iterm2, kitty, sixel
-from cellpix.probe import ITERM2_GIFS, Capabilities, detect
+from pixcell import frames, halfblock, iterm2, kitty, sixel
+from pixcell.probe import ITERM2_GIFS, Capabilities, detect
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
 
-_capabilities = Capabilities("halfblock", reason="cellpix.textual.configure() wasn't called")
+_capabilities = Capabilities("halfblock", reason="pixcell.textual.configure() wasn't called")
 
 
 _animate = True
@@ -61,7 +61,7 @@ def animations_play() -> bool:
     """Do animated pictures (GIF, WebP, APNG) move here? The same choice :class:`Image`
     makes for each one, which may take them to another protocol the terminal has (iTerm2
     GIFs in iTerm2, Sixel in WezTerm), for telling a user or an agent what to expect.
-    False with ``configure(animate=False)`` or ``CELLPIX_ANIMATION=0``."""
+    False with ``configure(animate=False)`` or ``PIXCELL_ANIMATION=0``."""
     if not _animate:
         return False
     mode = _capabilities.animation
@@ -651,7 +651,7 @@ OVERLAY = ("iterm2", "kitty-direct", "sixel")
 """Protocols that paint at the cursor, after Textual has drawn the frame."""
 
 STEPPED = ("kitty", "sixel", "halfblock")
-"""Protocols cellpix can animate itself, a frame at a time."""
+"""Protocols pixcell can animate itself, a frame at a time."""
 
 STEP_BATCH_SECONDS = 0.25
 """How often a worker encoding frames hands what it has made to the widget."""
@@ -698,9 +698,9 @@ def _animation_mode(protocol: str) -> str:
 def _better_for_animation(mode: str) -> tuple[str, str] | None:
     """Another protocol the terminal has that would move this picture, when the usual one
     can't (or only steps it): (protocol, animation mode), or None. Never past a protocol
-    forced with ``CELLPIX_PROTOCOL``, nor inside tmux (placeholders only there)."""
+    forced with ``PIXCELL_PROTOCOL``, nor inside tmux (placeholders only there)."""
     found = _capabilities
-    if found.tmux or found.reason == "CELLPIX_PROTOCOL" or os.environ.get("CELLPIX_ANIMATION") == "0":
+    if found.tmux or found.reason == "PIXCELL_PROTOCOL" or os.environ.get("PIXCELL_ANIMATION") == "0":
         return None
     if "iterm2" in found.supported and found.terminal in ITERM2_GIFS:
         return "iterm2", "native"  # the terminal plays a GIF itself
@@ -750,9 +750,9 @@ class _Painter:
 
     @classmethod
     def for_app(cls, app) -> "_Painter":
-        painter = getattr(app, "_cellpix_painter", None)
+        painter = getattr(app, "_pixcell_painter", None)
         if painter is None:
-            painter = app._cellpix_painter = cls(app)
+            painter = app._pixcell_painter = cls(app)
         return painter
 
     def _display_and_paint(self, screen, renderable) -> None:
@@ -782,6 +782,6 @@ class _Painter:
 def _through_tmux(codes: str) -> str:
     """Each graphics escape code wrapped for tmux's passthrough (one per code: tmux
     limits how much one passthrough sequence may carry)."""
-    from cellpix.probe import _wrap
+    from pixcell.probe import _wrap
 
     return "".join(_wrap(code + "\x1b\\", tmux=True) for code in codes.split("\x1b\\") if code)

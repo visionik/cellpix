@@ -3,8 +3,8 @@ import re
 
 import pytest
 
-from cellpix import kitty
-from cellpix._diacritics import DIACRITICS
+from pixcell import kitty
+from pixcell._diacritics import DIACRITICS
 
 
 def test_diacritics_start_as_the_spec_says():
@@ -56,7 +56,7 @@ def test_id_colour_and_new_ids():
 
 
 def test_codes_go_through_tmux_one_by_one():
-    from cellpix.textual import _through_tmux
+    from pixcell.textual import _through_tmux
 
     codes = kitty.place(42, 10, 3) + kitty.delete(42)
     wrapped = _through_tmux(codes)

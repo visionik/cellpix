@@ -8,9 +8,9 @@ from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
-import cellpix.textual as ct
-from cellpix import iterm2, kitty, sixel
-from cellpix.probe import Capabilities
+import pixcell.textual as ct
+from pixcell import iterm2, kitty, sixel
+from pixcell.probe import Capabilities
 
 
 def test_sixel_bands_and_runs():

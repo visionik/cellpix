@@ -6,10 +6,10 @@ from PIL import Image as PILImage
 from PIL import ImageDraw
 from textual.app import App, ComposeResult
 
-import cellpix.textual as ct
-from cellpix import kitty
-from cellpix.live import LiveImage
-from cellpix.probe import Capabilities
+import pixcell.textual as ct
+from pixcell import kitty
+from pixcell.live import LiveImage
+from pixcell.probe import Capabilities
 
 
 def test_raw_pixel_commands():
