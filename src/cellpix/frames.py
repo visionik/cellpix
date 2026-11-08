@@ -16,6 +16,8 @@ Two ways to get them:
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
@@ -31,6 +33,22 @@ DEFAULT_GAP = 100
 """Milliseconds for a frame that doesn't say (browsers use about this)."""
 MIN_GAP = 20
 """Faster than this, browsers slow a frame down: so do we (a 0 or 10 ms GIF frame)."""
+
+
+_locks_lock = threading.Lock()
+
+
+@contextmanager
+def _decoding(image: "Image"):
+    """One thread at a time goes through an image's frames. Seeking moves the image
+    itself, so two widgets showing the same picture (each encoding in a worker) would
+    otherwise read each other's frames, or break Pillow mid-frame."""
+    with _locks_lock:
+        lock = image.__dict__.get("_cellpix_lock")
+        if lock is None:
+            lock = image.__dict__["_cellpix_lock"] = threading.Lock()
+    with lock:
+        yield
 
 
 def is_animated(image: "Image") -> bool:
@@ -53,17 +71,18 @@ def frames(
         return None
     result: list[tuple[Image, int]] = []
     total = 0
-    position = image.tell()
-    try:
-        for picture in ImageSequence.Iterator(image):
-            gap = picture.info.get("duration") or DEFAULT_GAP
-            fitted = fit(picture.convert("RGBA"))
-            total += fitted.width * fitted.height * 4
-            if total > max_bytes:
-                return None
-            result.append((fitted, max(MIN_GAP, int(gap))))
-    finally:
-        image.seek(position)
+    with _decoding(image):
+        position = image.tell()
+        try:
+            for picture in ImageSequence.Iterator(image):
+                gap = picture.info.get("duration") or DEFAULT_GAP
+                fitted = fit(picture.convert("RGBA"))
+                total += fitted.width * fitted.height * 4
+                if total > max_bytes:
+                    return None
+                result.append((fitted, max(MIN_GAP, int(gap))))
+        finally:
+            image.seek(position)
     return result if len(result) > 1 else None
 
 
@@ -88,18 +107,19 @@ def encoded_frames(
     result: list[tuple[bytes, int]] = []
     size = (0, 0)
     decoded = encoded = 0
-    position = image.tell()
-    try:
-        for picture in ImageSequence.Iterator(image):
-            gap = picture.info.get("duration") or DEFAULT_GAP
-            fitted = fit(picture.convert("RGBA"))
-            size = fitted.size
-            decoded += fitted.width * fitted.height * 4
-            data = encode(fitted)
-            encoded += len(data)
-            if encoded > max_encoded:
-                return None
-            result.append((data, max(MIN_GAP, int(gap))))
-    finally:
-        image.seek(position)
+    with _decoding(image):
+        position = image.tell()
+        try:
+            for picture in ImageSequence.Iterator(image):
+                gap = picture.info.get("duration") or DEFAULT_GAP
+                fitted = fit(picture.convert("RGBA"))
+                size = fitted.size
+                decoded += fitted.width * fitted.height * 4
+                data = encode(fitted)
+                encoded += len(data)
+                if encoded > max_encoded:
+                    return None
+                result.append((data, max(MIN_GAP, int(gap))))
+        finally:
+            image.seek(position)
     return (result, size, decoded) if len(result) > 1 else None

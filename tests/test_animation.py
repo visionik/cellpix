@@ -199,3 +199,32 @@ async def test_a_long_gif_over_the_terminals_budget_is_stepped_and_reserves_two_
     ct.configure(Capabilities("halfblock"))
     assert widget.animated and widget._animation == "stepped" and len(widget._steps) == 228
     assert 0 < reserved <= 2 * 350 * 233 * 4  # two frames at most, not 228 (74 MB)
+
+
+def test_two_threads_can_go_through_one_animated_picture():
+    """The bug: the demo shows each picture twice, and both widgets' workers seeked the
+    same image at once: frames came out of order, or Pillow broke and both stayed still.
+    Each encode here pauses, so without the lock the two threads interleave."""
+    import threading
+    import time
+
+    image = _long_gif(40, (60, 40))
+    results = {}
+
+    def encode(picture):
+        time.sleep(0.001)
+        return picture.tobytes()
+
+    def work(name):
+        try:
+            results[name] = frames.encoded_frames(image, lambda picture: picture, encode)
+        except Exception as error:
+            results[name] = error
+
+    threads = [threading.Thread(target=work, args=(name,)) for name in "ab"]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    alone = frames.encoded_frames(image, lambda picture: picture, lambda picture: picture.tobytes())
+    assert results["a"] == results["b"] == alone
