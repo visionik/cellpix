@@ -50,6 +50,11 @@ KITTY_ANIMATION = {"kitty": (0,), "ghostty": (1, 4), "rex": (0,)}
 yes; Ghostty 1.3.1 lacks ``a=f``; iTerm2 3.7.7 doesn't (it plays GIFs in its own protocol).
 Elsewhere with placeholders, cellpix steps through the frames itself."""
 
+ITERM2_GIFS = {"iterm2"}
+"""Terminals (XTVERSION name) that play animated GIFs sent as iTerm2 inline images.
+Checked by eye (2026-11-07): iTerm2 yes; WezTerm 20240203 shows the first frame only.
+Elsewhere an iTerm2 picture stays still (or moves as Sixel, where the terminal has it)."""
+
 BUDGETS = {"rex": 8 * 1024 * 1024}
 """Image memory to stay under, where a terminal keeps less than usual (Rex: 10 MB)."""
 DEFAULT_BUDGET = 64 * 1024 * 1024
@@ -110,9 +115,10 @@ class Capabilities:
         playback, Sixel, half blocks), or ``""`` (they stay still).
         ``CELLPIX_ANIMATION=native|stepped|0`` overrides it for Kitty terminals; ``0``
         also stills Sixel and half blocks."""
-        if self.protocol == "iterm2":
-            return "native"  # the terminal plays a GIF
         override = os.environ.get("CELLPIX_ANIMATION", "")
+        if self.protocol == "iterm2":
+            plays = self.terminal in ITERM2_GIFS and override != "0"
+            return "native" if plays else ""  # the terminal plays a GIF
         if self.protocol in ("sixel", "halfblock"):
             return "" if override == "0" else "stepped"  # repainted frame by frame
         if self.protocol not in ("kitty", "kitty-direct"):

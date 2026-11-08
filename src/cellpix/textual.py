@@ -29,7 +29,7 @@ from textual.strip import Strip
 from textual.widget import Widget
 
 from cellpix import frames, halfblock, iterm2, kitty, sixel
-from cellpix.probe import Capabilities, detect
+from cellpix.probe import ITERM2_GIFS, Capabilities, detect
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -147,9 +147,10 @@ class Image(Widget):
         # Animation: played by the terminal where it can, else stepped through by us.
         wants = (_animate if animate is None else animate) and frames.is_animated(image)
         mode = _animation_mode(self.protocol) if wants else ""
-        if wants and mode != "native" and protocol is None and _better_for_animation():
-            # e.g. iTerm2: placeholders for still pictures, its own GIFs for moving ones.
-            self.protocol, mode = "iterm2", "native"
+        if wants and mode != "native" and protocol is None and (better := _better_for_animation(mode)):
+            # e.g. iTerm2: placeholders for still pictures, its own GIFs for moving ones;
+            # WezTerm: iTerm2 images for still pictures, Sixel stepped for moving ones.
+            self.protocol, mode = better
         if mode == "stepped" and self.protocol not in STEPPED:
             mode = ""  # Kitty placements at the cursor would flicker
         self._animation = mode
@@ -633,9 +634,18 @@ def _animation_mode(protocol: str) -> str:
     return Capabilities(protocol, terminal=_capabilities.terminal, version=_capabilities.version).animation
 
 
-def _better_for_animation() -> bool:
-    """The terminal can't animate in its usual protocol but plays iTerm2 GIFs (iTerm2)."""
-    return "iterm2" in _capabilities.supported and not _capabilities.tmux
+def _better_for_animation(mode: str) -> tuple[str, str] | None:
+    """Another protocol the terminal has that would move this picture, when the usual one
+    can't (or only steps it): (protocol, animation mode), or None. Never past a protocol
+    forced with ``CELLPIX_PROTOCOL``, nor inside tmux (placeholders only there)."""
+    found = _capabilities
+    if found.tmux or found.reason == "CELLPIX_PROTOCOL":
+        return None
+    if "iterm2" in found.supported and found.terminal in ITERM2_GIFS:
+        return "iterm2", "native"  # the terminal plays a GIF itself
+    if not mode and "sixel" in found.supported:
+        return "sixel", "stepped"  # repainted frame by frame
+    return None
 
 
 def _kitty_animation(image_id: int, encoded: list) -> str:

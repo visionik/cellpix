@@ -47,7 +47,8 @@ def test_which_terminals_play_animations(monkeypatch):
     assert Capabilities("kitty", terminal="rex").animation == "native"
     assert Capabilities("kitty", terminal="iterm2", version="3.7.7").animation == "stepped"
     assert Capabilities("kitty-direct", terminal="wezterm").animation == ""  # would flicker
-    assert Capabilities("iterm2", terminal="wezterm").animation == "native"
+    assert Capabilities("iterm2", terminal="iterm2", version="3.7.7").animation == "native"
+    assert Capabilities("iterm2", terminal="wezterm").animation == ""  # shows the first frame only
     assert Capabilities("sixel", terminal="foot").animation == "stepped"  # repainted per frame
     assert Capabilities("halfblock").animation == "stepped"
     assert Capabilities("off").animation == ""
@@ -107,7 +108,7 @@ async def test_still_where_the_terminal_does_not_animate_or_when_asked():
 async def test_iterm2_sends_a_gif_when_fully_visible():
     import base64
 
-    widget, sent = await _run(Capabilities("iterm2", (8, 16), terminal="wezterm"))
+    widget, sent = await _run(Capabilities("iterm2", (8, 16), terminal="iterm2"))
     payload = re.search(r"1337;File=[^:]*:([^\x07]*)\x07", sent).group(1)
     assert base64.b64decode(payload)[:6] in (b"GIF89a", b"GIF87a")
     assert widget.animated
@@ -274,3 +275,19 @@ def test_two_threads_can_go_through_one_animated_picture():
         thread.join()
     alone = frames.encoded_frames(image, lambda picture: picture, lambda picture: picture.tobytes())
     assert results["a"] == results["b"] == alone
+
+
+async def test_wezterm_moves_animations_as_sixel():
+    """WezTerm draws still pictures as iTerm2 images but doesn't play their GIFs: moving
+    ones go to Sixel, stepped. A protocol forced with CELLPIX_PROTOCOL is kept."""
+    supported = frozenset({"kitty-direct", "iterm2", "sixel"})
+    try:
+        ct.configure(Capabilities("iterm2", (7, 16), terminal="wezterm", supported=supported))
+        assert (ct.Image(_gif()).protocol, ct.Image(_gif())._animation) == ("sixel", "stepped")
+        assert ct.Image(PILImage.new("RGB", (8, 8))).protocol == "iterm2"  # still
+        ct.configure(Capabilities("sixel", (7, 16), terminal="wezterm", reason="CELLPIX_PROTOCOL", supported=supported))
+        assert (ct.Image(_gif()).protocol, ct.Image(_gif())._animation) == ("sixel", "stepped")
+        ct.configure(Capabilities("iterm2", (7, 16), terminal="wezterm", reason="CELLPIX_PROTOCOL", supported=supported))
+        assert ct.Image(_gif()).protocol == "iterm2" and not ct.Image(_gif()).animated
+    finally:
+        ct.configure(Capabilities("halfblock"))
