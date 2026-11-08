@@ -13,6 +13,12 @@ from the last frame shown, as an in-place edit of the image (``a=f`` with ``r=1`
 in the format the terminal takes in fastest (raw pixels + zlib; PNG for iTerm2). Where
 edits aren't known to redraw, whole frames are swapped between two image ids instead.
 Overlay protocols (Sixel, iTerm2, Kitty placements) and half blocks repaint the widget.
+
+Sixel is encoded on the main thread, each frame. Checked by eye (2026-11-07) in WezTerm
+20240203, a detailed page scrolling (``python -m cellpix live 30 scroll``): 30 fps at
+560x384 pixels, ~25 ms of main thread and ~112 KB a frame. Transparent pixels aren't
+painted, so a frame with transparency (or a letterbox that moves) would leave the last
+frame's pixels there; frames without it, as here, are fine.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from textual import events
 from textual.message import Message
 
 from cellpix import kitty
-from cellpix.textual import OVERLAY, Image, _Painter, _png, _registry, capabilities, cell_size
+from cellpix.textual import OVERLAY, Image, _png, _registry, capabilities, cell_size
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -110,12 +116,10 @@ class LiveImage(Image):
                 self._write(kitty.delete(self._image_id))  # new data under the same id
                 _registry.remove(self._image_id)
                 self._sent_box = None
-            # Paint over the old picture directly: asking Textual to redraw the cells would
-            # blank them first, and the blank shows as flicker.
-            self.bytes_sent += _Painter.for_app(self.app).paint_now(self)
+            self.bytes_sent += self._repaint()  # painted straight over the old frame
         else:
             self._halfblock = None
-            self.refresh()
+            self._repaint()
 
     # Kitty placeholders ----------------------------------------------------------------
 

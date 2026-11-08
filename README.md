@@ -9,6 +9,9 @@ Images in terminal cells, MIT-licensed:
   placeholders (older iTerm2, WezTerm, foot, xterm, Konsole...): painted over the image's cells
   after each frame, cropped to what's visible.
 - **Half blocks** (`▀`, two pixels per cell) for any terminal with 24-bit colour.
+- **Animated pictures** (GIF, WebP, APNG): played by the terminal where it can (Kitty,
+  Ghostty 1.4+, Rex, iTerm2), otherwise stepped through by cellpix, a frame at a time
+  (other placeholder terminals, Sixel, half blocks). `CELLPIX_ANIMATION=0` keeps them still.
 - A **probe** that asks the terminal which it supports, and its cell size in pixels.
 - A **Textual** widget (`pip install cellpix[textual]`).
 

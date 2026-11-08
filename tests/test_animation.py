@@ -47,13 +47,18 @@ def test_which_terminals_play_animations(monkeypatch):
     assert Capabilities("kitty", terminal="rex").animation == "native"
     assert Capabilities("kitty", terminal="iterm2", version="3.7.7").animation == "stepped"
     assert Capabilities("kitty-direct", terminal="wezterm").animation == ""  # would flicker
-    assert Capabilities("iterm2", terminal="wezterm").animation == "native"
-    assert Capabilities("sixel", terminal="foot").animation == ""
+    assert Capabilities("iterm2", terminal="iterm2", version="3.7.7").animation == "native"
+    assert Capabilities("iterm2", terminal="wezterm").animation == ""  # shows the first frame only
+    assert Capabilities("sixel", terminal="foot").animation == "stepped"  # repainted per frame
+    assert Capabilities("halfblock").animation == "stepped"
+    assert Capabilities("off").animation == ""
     monkeypatch.setenv("CELLPIX_ANIMATION", "native")
     assert Capabilities("kitty", terminal="ghostty", version="1.3.1").animation == "native"
-    assert Capabilities("sixel", terminal="foot").animation == ""  # Sixel can't, whatever
+    assert Capabilities("sixel", terminal="foot").animation == "stepped"  # never native
     monkeypatch.setenv("CELLPIX_ANIMATION", "0")
     assert Capabilities("kitty", terminal="kitty").animation == ""
+    assert Capabilities("sixel", terminal="foot").animation == ""
+    assert Capabilities("halfblock").animation == ""
 
 
 class _App(App):
@@ -103,10 +108,35 @@ async def test_still_where_the_terminal_does_not_animate_or_when_asked():
 async def test_iterm2_sends_a_gif_when_fully_visible():
     import base64
 
-    widget, sent = await _run(Capabilities("iterm2", (8, 16), terminal="wezterm"))
-    payload = re.search(r"1337;File=[^:]*:([^\x07]*)\x07", sent).group(1)
-    assert base64.b64decode(payload)[:6] in (b"GIF89a", b"GIF87a")
+    widget, sent = await _iterm2_run(_gif())
+    payloads = [base64.b64decode(found) for found in re.findall(r"1337;File=[^:]*:([^\x07]*)\x07", sent)]
+    assert payloads[0][:4] == b"\x89PNG"  # still, while the GIF is made in a worker
+    assert payloads[-1][:6] in (b"GIF89a", b"GIF87a")
     assert widget.animated
+
+
+async def _iterm2_run(image):
+    ct.configure(Capabilities("iterm2", (8, 16), terminal="iterm2"))
+    widget = ct.Image(image)
+    written = []
+    async with _App(widget, written).run_test() as pilot:
+        for _ in range(80):
+            await pilot.pause(0.05)
+            if "R0lGOD" in "".join(written):  # base64 of "GIF8"
+                break
+    ct.configure(Capabilities("halfblock"))
+    return widget, "".join(written)
+
+
+async def test_iterm2_plays_long_gifs_too():
+    """The bug: a 228-frame GIF stayed still in iTerm2 (frames() gave up past 200)."""
+    import base64
+    import io
+
+    widget, sent = await _iterm2_run(_long_gif(228, (60, 40)))
+    payload = re.findall(r"1337;File=[^:]*:([^\x07]*)\x07", sent)[-1]
+    played = PILImage.open(io.BytesIO(base64.b64decode(payload)))
+    assert widget.animated and played.n_frames == 228 and played.info["duration"] == 80
 
 
 async def test_placeholder_terminals_without_playback_step_through_the_frames():
@@ -174,10 +204,11 @@ def _long_gif(count, size):
 
 
 def test_a_long_animation_is_encoded_not_dropped():
-    """228 frames: over MAX_FRAMES (200), which only limits frames kept decoded."""
+    """228 frames: no frame count limits it, only memory (frames() used to stop at 200)."""
     gif = _long_gif(228, (60, 40))
     assert gif.n_frames == 228
-    assert frames.frames(gif, lambda picture: picture) is None
+    assert len(frames.frames(gif, lambda picture: picture)) == 228
+    assert frames.frames(gif, lambda picture: picture, max_bytes=100 * 60 * 40 * 4) is None  # memory does
     encoded, _, _ = frames.encoded_frames(gif, lambda picture: picture, lambda picture: b"p")
     assert len(encoded) == 228
 
@@ -199,3 +230,90 @@ async def test_a_long_gif_over_the_terminals_budget_is_stepped_and_reserves_two_
     ct.configure(Capabilities("halfblock"))
     assert widget.animated and widget._animation == "stepped" and len(widget._steps) == 228
     assert 0 < reserved <= 2 * 350 * 233 * 4  # two frames at most, not 228 (74 MB)
+
+
+async def _stepped_output(capabilities, seconds=0.8):
+    ct.configure(capabilities)
+    widget = ct.Image(_gif(gaps=(40, 40, 40)))
+    written = []
+    async with _App(widget, written).run_test() as pilot:
+        await pilot.pause(seconds)
+    ct.configure(Capabilities("halfblock"))
+    return widget, "".join(written)
+
+
+async def test_half_blocks_step_through_the_frames(monkeypatch):
+    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    ct.configure(Capabilities("halfblock", (8, 16)))
+    widget = ct.Image(_gif(gaps=(40, 40, 40)))
+    seen = set()
+    async with _App(widget, []).run_test() as pilot:
+        for _ in range(40):
+            await pilot.pause(0.02)
+            seen |= {segment.style.color.triplet for segment in widget.render_line(1) if segment.style.color}
+    ct.configure(Capabilities("halfblock"))
+    assert widget.animated and widget._animation == "stepped" and len(widget._steps) == 3
+    assert {(0, 100, 255), (60, 100, 195), (120, 100, 135)} <= {tuple(colour) for colour in seen}
+
+
+async def test_sixel_steps_through_the_frames_painting_each_whole(monkeypatch):
+    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    widget, sent = await _stepped_output(Capabilities("sixel", (8, 16), terminal="foot"))
+    assert widget.animated and len(widget._steps) == 3
+    codes = re.findall(r"\x1bP0;1;0q.*?\x1b\\", sent, re.S)
+    palettes = [re.findall(r"#\d+;2;([\d;]+)", code) for code in codes[-3:]]
+    for red, blue in ((0, 255), (60, 195), (120, 135)):  # every frame, in Sixel's percentages
+        assert any(f"{red * 100 // 255};39;{blue * 100 // 255}" in palette for palette in palettes)
+    # Opaque: the letterbox is painted in the background colour, so no old frame shows.
+    assert all(len(palette) == 2 for palette in palettes) and len({palette[1] for palette in palettes}) == 1
+
+
+async def test_stepping_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("CELLPIX_ANIMATION", "0")
+    widget, sent = await _stepped_output(Capabilities("halfblock", (8, 16)), seconds=0.3)
+    assert not widget.animated and not widget._steps
+
+
+def test_two_threads_can_go_through_one_animated_picture():
+    """The bug: the demo shows each picture twice, and both widgets' workers seeked the
+    same image at once: frames came out of order, or Pillow broke and both stayed still.
+    Each encode here pauses, so without the lock the two threads interleave."""
+    import threading
+    import time
+
+    image = _long_gif(40, (60, 40))
+    results = {}
+
+    def encode(picture):
+        time.sleep(0.001)
+        return picture.tobytes()
+
+    def work(name):
+        try:
+            results[name] = frames.encoded_frames(image, lambda picture: picture, encode)
+        except Exception as error:
+            results[name] = error
+
+    threads = [threading.Thread(target=work, args=(name,)) for name in "ab"]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    alone = frames.encoded_frames(image, lambda picture: picture, lambda picture: picture.tobytes())
+    assert results["a"] == results["b"] == alone
+
+
+async def test_wezterm_moves_animations_as_sixel():
+    """WezTerm draws still pictures as iTerm2 images but doesn't play their GIFs: moving
+    ones go to Sixel, stepped. A protocol forced with CELLPIX_PROTOCOL is kept."""
+    supported = frozenset({"kitty-direct", "iterm2", "sixel"})
+    try:
+        ct.configure(Capabilities("iterm2", (7, 16), terminal="wezterm", supported=supported))
+        assert (ct.Image(_gif()).protocol, ct.Image(_gif())._animation) == ("sixel", "stepped")
+        assert ct.Image(PILImage.new("RGB", (8, 8))).protocol == "iterm2"  # still
+        ct.configure(Capabilities("sixel", (7, 16), terminal="wezterm", reason="CELLPIX_PROTOCOL", supported=supported))
+        assert (ct.Image(_gif()).protocol, ct.Image(_gif())._animation) == ("sixel", "stepped")
+        ct.configure(Capabilities("iterm2", (7, 16), terminal="wezterm", reason="CELLPIX_PROTOCOL", supported=supported))
+        assert ct.Image(_gif()).protocol == "iterm2" and not ct.Image(_gif()).animated
+    finally:
+        ct.configure(Capabilities("halfblock"))
