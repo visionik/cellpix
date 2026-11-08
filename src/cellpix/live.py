@@ -19,6 +19,11 @@ Sixel is encoded on the main thread, each frame. Checked by eye (2026-11-07) in 
 560x384 pixels, ~25 ms of main thread and ~112 KB a frame. Transparent pixels aren't
 painted, so a frame with transparency (or a letterbox that moves) would leave the last
 frame's pixels there; frames without it, as here, are fine.
+
+WezTerm's own choice is iTerm2 images, and it's the better one there (2026-11-08,
+``live 60 scroll``, 80 columns): 59.3 fps at 60, ~7 ms of main thread and ~223 KB a frame,
+WezTerm's memory steady (~200 MB) as frames replace each other. Sixel at 60 managed
+17.6 fps, and WezTerm's memory kept growing (350 to 510 MB in 70 s).
 """
 
 from __future__ import annotations
