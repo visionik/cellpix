@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Iterator
 
 if TYPE_CHECKING:
     from PIL.Image import Image
@@ -122,6 +122,32 @@ def gif(
     return data if len(data) <= max_bytes else None
 
 
+def each_encoded_frame(
+    image: "Image",
+    fit: Callable[["Image"], "Image"],
+    encode: Callable[["Image"], bytes],
+    *,
+    max_frames: int = MAX_STEPPED_FRAMES,
+) -> Iterator[tuple[bytes, int, tuple[int, int]]]:
+    """Each frame as it's decoded: encoded (after ``fit``), with its gap in milliseconds
+    and its fitted size, so a caller can start showing frames before the last is made.
+    Nothing if the picture isn't animated or has more than ``max_frames`` frames. The
+    image is held (for this thread) until the iteration ends: finish or close it."""
+    from PIL import ImageSequence
+
+    if not is_animated(image) or getattr(image, "n_frames", 1) > max_frames:
+        return
+    with _decoding(image):
+        position = image.tell()
+        try:
+            for picture in ImageSequence.Iterator(image):
+                gap = picture.info.get("duration") or DEFAULT_GAP
+                fitted = fit(picture.convert("RGBA"))
+                yield encode(fitted), max(MIN_GAP, int(gap)), fitted.size
+        finally:
+            image.seek(position)
+
+
 def encoded_frames(
     image: "Image",
     fit: Callable[["Image"], "Image"],
@@ -134,28 +160,17 @@ def encoded_frames(
     and the bytes they'd take decoded (what a terminal keeps to play them itself); or None
     if the picture isn't animated, or is too long or too big even encoded. Each decoded
     frame is dropped once encoded, so memory goes to the encoded frames only."""
-    from PIL import ImageSequence
-
-    if not is_animated(image):
-        return None
-    if getattr(image, "n_frames", 1) > max_frames:
-        return None
     result: list[tuple[bytes, int]] = []
     size = (0, 0)
     decoded = encoded = 0
-    with _decoding(image):
-        position = image.tell()
-        try:
-            for picture in ImageSequence.Iterator(image):
-                gap = picture.info.get("duration") or DEFAULT_GAP
-                fitted = fit(picture.convert("RGBA"))
-                size = fitted.size
-                decoded += fitted.width * fitted.height * 4
-                data = encode(fitted)
-                encoded += len(data)
-                if encoded > max_encoded:
-                    return None
-                result.append((data, max(MIN_GAP, int(gap))))
-        finally:
-            image.seek(position)
+    frames_made = each_encoded_frame(image, fit, encode, max_frames=max_frames)
+    try:
+        for data, gap, size in frames_made:
+            decoded += size[0] * size[1] * 4
+            encoded += len(data)
+            if encoded > max_encoded:
+                return None
+            result.append((data, gap))
+    finally:
+        frames_made.close()  # lets the image go at once
     return (result, size, decoded) if len(result) > 1 else None
