@@ -9,4 +9,4 @@
 - :mod:`pixcell.live` — ``LiveImage``, a Textual widget you keep pushing frames into.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
