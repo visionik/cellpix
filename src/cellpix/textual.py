@@ -169,6 +169,7 @@ class Image(Widget):
         # The first frame, for drawing still on the main thread while a worker steps
         # through the animation's frames (seeking the image as it goes).
         self._first = image.copy() if self._animating else None
+        self._gif: tuple[tuple[int, int], bytes] | None = None  # iTerm2: (canvas size, GIF)
 
     @property
     def _picture(self) -> "PILImage":
@@ -456,7 +457,9 @@ class Image(Widget):
                     return move + self._steps[self._step_index][0].decode("ascii")
             else:
                 self._prepare_steps(steps_key)
-        key = (self.protocol, crop, canvas.size)
+        whole = crop == (0, 0, canvas.width, canvas.height)
+        moving = self._iterm2_gif(canvas.size) if self.protocol == "iterm2" and self._animating and whole else None
+        key = (self.protocol, crop, canvas.size, moving is not None)
         if self._crop_cache is None or self._crop_cache[0] != key:
             left, top, crop_width, crop_height = crop
             piece = canvas.crop((left, top, left + crop_width, top + crop_height))
@@ -465,15 +468,40 @@ class Image(Widget):
                 # (and at the bottom of the screen, scroll it).
                 piece = piece.crop((0, 0, crop_width, crop_height - crop_height % 6))
                 code = sixel.encode(piece)
-            elif self._animating and crop == (0, 0, canvas.width, canvas.height) and (
-                moving := self._canvas_frames(canvas)
-            ):
+            elif moving is not None:
                 # Fully visible: the terminal plays a GIF itself. Partly visible: a still crop.
-                code = iterm2.inline(_gif(moving), width, height)
+                code = iterm2.inline(moving, width, height)
             else:
                 code = iterm2.inline(_png(piece), width, height)
             self._crop_cache = (key, code)
         return move + self._crop_cache[1]
+
+    def _iterm2_gif(self, box: tuple[int, int]) -> bytes | None:
+        """The animation as a GIF the size of the canvas, once a worker has made it (still
+        until then: making it can take seconds)."""
+        if self._gif is not None and self._gif[0] == box:
+            return self._gif[1]
+        if not self._preparing:
+            self._preparing = True
+
+            def work() -> None:
+                try:
+                    data = frames.gif(self.image, lambda picture: _fit_into(picture, box))
+                except Exception:
+                    data = None
+                self.app.call_from_thread(self._gif_made, box, data)
+
+            self.call_later(self.run_worker, work, thread=True, exit_on_error=False)
+        return None
+
+    def _gif_made(self, box: tuple[int, int], data: bytes | None) -> None:
+        self._preparing = False
+        if data is None:
+            self._animating = False  # too long or too big: still
+        else:
+            self._gif = (box, data)
+        if self.is_attached:
+            self._repaint()  # the GIF (or, if it moved on meanwhile, one for the new size)
 
     def _frame_budget(self) -> int:
         """Decoded bytes an animation's frames may take. Played natively, the terminal keeps
@@ -657,17 +685,6 @@ def _kitty_animation(image_id: int, encoded: list) -> str:
     codes.append(kitty.animate(image_id, frame=1, gap=first_gap))
     codes.append(kitty.animate(image_id, run=True))
     return "".join(codes)
-
-
-def _gif(moving: list) -> bytes:
-    """An animated GIF of these (RGBA picture, gap) frames, looping forever."""
-    pictures = [picture for picture, _ in moving]
-    buffer = io.BytesIO()
-    pictures[0].save(
-        buffer, format="GIF", save_all=True, append_images=pictures[1:],
-        duration=[gap for _, gap in moving], loop=0, disposal=2,
-    )
-    return buffer.getvalue()
 
 
 def _png(picture) -> bytes:

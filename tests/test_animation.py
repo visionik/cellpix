@@ -108,10 +108,35 @@ async def test_still_where_the_terminal_does_not_animate_or_when_asked():
 async def test_iterm2_sends_a_gif_when_fully_visible():
     import base64
 
-    widget, sent = await _run(Capabilities("iterm2", (8, 16), terminal="iterm2"))
-    payload = re.search(r"1337;File=[^:]*:([^\x07]*)\x07", sent).group(1)
-    assert base64.b64decode(payload)[:6] in (b"GIF89a", b"GIF87a")
+    widget, sent = await _iterm2_run(_gif())
+    payloads = [base64.b64decode(found) for found in re.findall(r"1337;File=[^:]*:([^\x07]*)\x07", sent)]
+    assert payloads[0][:4] == b"\x89PNG"  # still, while the GIF is made in a worker
+    assert payloads[-1][:6] in (b"GIF89a", b"GIF87a")
     assert widget.animated
+
+
+async def _iterm2_run(image):
+    ct.configure(Capabilities("iterm2", (8, 16), terminal="iterm2"))
+    widget = ct.Image(image)
+    written = []
+    async with _App(widget, written).run_test() as pilot:
+        for _ in range(80):
+            await pilot.pause(0.05)
+            if "R0lGOD" in "".join(written):  # base64 of "GIF8"
+                break
+    ct.configure(Capabilities("halfblock"))
+    return widget, "".join(written)
+
+
+async def test_iterm2_plays_long_gifs_too():
+    """The bug: a 228-frame GIF stayed still in iTerm2 (frames() gave up past 200)."""
+    import base64
+    import io
+
+    widget, sent = await _iterm2_run(_long_gif(228, (60, 40)))
+    payload = re.findall(r"1337;File=[^:]*:([^\x07]*)\x07", sent)[-1]
+    played = PILImage.open(io.BytesIO(base64.b64decode(payload)))
+    assert widget.animated and played.n_frames == 228 and played.info["duration"] == 80
 
 
 async def test_placeholder_terminals_without_playback_step_through_the_frames():
@@ -179,10 +204,11 @@ def _long_gif(count, size):
 
 
 def test_a_long_animation_is_encoded_not_dropped():
-    """228 frames: over MAX_FRAMES (200), which only limits frames kept decoded."""
+    """228 frames: no frame count limits it, only memory (frames() used to stop at 200)."""
     gif = _long_gif(228, (60, 40))
     assert gif.n_frames == 228
-    assert frames.frames(gif, lambda picture: picture) is None
+    assert len(frames.frames(gif, lambda picture: picture)) == 228
+    assert frames.frames(gif, lambda picture: picture, max_bytes=100 * 60 * 40 * 4) is None  # memory does
     encoded, _, _ = frames.encoded_frames(gif, lambda picture: picture, lambda picture: b"p")
     assert len(encoded) == 228
 
