@@ -150,15 +150,29 @@ class Image(Widget):
         if wants and mode != "native" and protocol is None and _better_for_animation():
             # e.g. iTerm2: placeholders for still pictures, its own GIFs for moving ones.
             self.protocol, mode = "iterm2", "native"
-        if mode == "stepped" and self.protocol != "kitty":
-            mode = ""  # stepping is for placeholder images only
+        if mode == "stepped" and self.protocol not in STEPPED:
+            mode = ""  # Kitty placements at the cursor would flicker
         self._animation = mode
         self._animating = bool(mode)
         self._frames: tuple[tuple, list] | None = None  # (key, [(canvas frame, gap ms)])
         self._paused = False
-        self._steps: list[tuple[bytes, int]] = []  # stepped animation: encoded frames
+        # Stepped animation: each frame encoded for the protocol (Kitty: PNG; Sixel: the
+        # escape code; half blocks: RGBA pixels), made for the size in _steps_key.
+        self._steps: list[tuple[bytes, int]] = []
+        self._steps_key: tuple | None = None
         self._step_index = 0
-        self._spare_id = kitty.new_image_id()  # stepped: the other buffer
+        self._stepping = False  # a step timer is pending
+        self._preparing = False  # a worker is encoding frames (Sixel, half blocks)
+        self._step_strips: dict[int, list[Strip]] = {}  # half blocks: frames drawn as strips
+        self._spare_id = kitty.new_image_id()  # stepped Kitty: the other buffer
+        # The first frame, for drawing still on the main thread while a worker steps
+        # through the animation's frames (seeking the image as it goes).
+        self._first = image.copy() if self._animating else None
+
+    @property
+    def _picture(self) -> "PILImage":
+        """The picture to draw when not stepping: the first frame of an animation."""
+        return self._first if self._first is not None else self.image
 
     @property
     def animated(self) -> bool:
@@ -200,22 +214,25 @@ class Image(Widget):
         return Strip([Segment(kitty.placeholder_row(self._image_id, y, columns), style)], columns)
 
     def _halfblock_lines(self, columns: int, rows: int) -> list[Strip]:
+        if self._animating:
+            if self._steps and self._steps_key == (columns, rows):
+                return self._halfblock_frame(columns, rows)
+            self._prepare_steps((columns, rows))  # still until the frames are ready
         if self._halfblock is None or self._halfblock[0] != (columns, rows):
-            strips = []
-            for line in halfblock.cells(self.image, columns, rows):
-                segments = [
-                    Segment(
-                        halfblock.UPPER_HALF,
-                        Style(
-                            color=Color.from_rgb(*upper) if upper else None,
-                            bgcolor=Color.from_rgb(*lower) if lower else None,
-                        ),
-                    )
-                    for upper, lower in line
-                ]
-                strips.append(Strip(Segment.simplify(segments), columns))
-            self._halfblock = ((columns, rows), strips)
+            self._halfblock = ((columns, rows), _strips(self._picture, columns, rows))
         return self._halfblock[1]
+
+    def _halfblock_frame(self, columns: int, rows: int) -> list[Strip]:
+        """The current frame's strips: all kept if they're small, else only the current one."""
+        from PIL import Image as Pillow
+
+        index = self._step_index
+        if (strips := self._step_strips.get(index)) is None:
+            if len(self._steps) * columns * rows > HALFBLOCK_CACHE_CELLS:
+                self._step_strips.clear()
+            picture = Pillow.frombytes("RGBA", (columns, rows * 2), self._steps[index][0])
+            strips = self._step_strips[index] = _strips(picture, columns, rows)
+        return strips
 
     def on_resize(self) -> None:
         self._halfblock = None
@@ -224,12 +241,12 @@ class Image(Widget):
     def on_mount(self) -> None:
         if self.protocol in OVERLAY:
             _Painter.for_app(self.app).widgets.add(self)
-        if self._animating and self.protocol == "kitty":
+        if self._animating and self.protocol in STEPPED:
             self.set_interval(0.5, self._pause_when_hidden)
 
     def _pause_when_hidden(self) -> None:
         """Stop an animation nobody can see; start it again on return."""
-        if self._sent_box is None:
+        if self.protocol == "kitty" and self._sent_box is None:
             return
         hidden = self._visible(self.screen) is None if self.is_attached else True
         if hidden != self._paused:
@@ -238,23 +255,124 @@ class Image(Widget):
                 self._write(kitty.animate(self._image_id, run=not hidden))
 
     def _step(self) -> None:
-        """Stepped animation, double-buffered: send the next frame as a whole image under
-        the spare id (with its own placement), then switch the placeholder text to it.
-        Terminals that don't redraw in-place edits (Rex) still show every frame."""
-        if not self.is_attached or not self._steps:
+        """Stepped animation: on to the next frame, if the current one can be shown."""
+        self._stepping = False
+        if not self.is_attached or not self._animating or not self._steps:
             return
-        gap = self._steps[self._step_index][1]
-        if self._sent_box is not None and self._placed is not None and not self._paused:
+        if not self._paused and self._step_ready():
             self._step_index = (self._step_index + 1) % len(self._steps)
-            png, gap = self._steps[self._step_index]
-            columns, rows = self._placed
-            shown, spare = self._image_id, self._spare_id
-            self._write(kitty.delete(spare) + kitty.transmit(spare, png) + kitty.place(spare, columns, rows))
-            _registry.remove(shown)
-            _registry.add(spare, self._sent_box[0] * self._sent_box[1] * 4, self)
-            self._image_id, self._spare_id = spare, shown
-            self.refresh()  # the placeholder text now names the new image
+            self._show_step()
+        self._schedule_step()
+
+    def _schedule_step(self) -> None:
+        """Start the step timer, unless it's running (one chain of timers per widget)."""
+        if self._stepping or not self._steps:
+            return
+        self._stepping = True
+        gap = self._steps[self._step_index % len(self._steps)][1]
         self.set_timer(max(gap, frames.MIN_GAP) / 1000, self._step)
+
+    def _step_ready(self) -> bool:
+        """Are the frames made for how the picture is shown now? (Not while it's being
+        sent again, or before frames for its new size are ready.) Sixel only steps while
+        fully visible: a part would need every frame encoded again for each crop."""
+        if self.protocol == "kitty":
+            return self._sent_box is not None and self._placed is not None
+        if self.protocol == "halfblock":
+            return self._steps_key == tuple(self.content_size)
+        return self._steps_key == self._sixel_key() and self._fully_visible()
+
+    def _show_step(self) -> None:
+        if self.protocol != "kitty":
+            self._repaint()
+            return
+        # Double-buffered: send the next frame as a whole image under the spare id (with
+        # its own placement), then switch the placeholder text to it. Terminals that
+        # don't redraw in-place edits (Rex) still show every frame.
+        png = self._steps[self._step_index][0]
+        columns, rows = self._placed
+        shown, spare = self._image_id, self._spare_id
+        self._write(kitty.delete(spare) + kitty.transmit(spare, png) + kitty.place(spare, columns, rows))
+        _registry.remove(shown)
+        _registry.add(spare, self._sent_box[0] * self._sent_box[1] * 4, self)
+        self._image_id, self._spare_id = spare, shown
+        self.refresh()  # the placeholder text now names the new image
+
+    def _repaint(self) -> int:
+        """Show the current frame now. Overlay pictures are painted straight over the old
+        one: asking Textual to redraw the cells would blank them first, and the blank
+        shows as flicker. Text (half blocks, placeholders) is redrawn. Returns the bytes
+        written by painting (0 for a redraw, which Textual writes later)."""
+        if self.protocol in OVERLAY:
+            return _Painter.for_app(self.app).paint_now(self)
+        self.refresh()
+        return 0
+
+    def _prepare_steps(self, key: tuple) -> None:
+        """Encode every frame for Sixel or half blocks at this size, in a worker."""
+        if self._preparing or not self.is_attached:
+            return
+        from PIL import Image as Pillow
+
+        self._preparing = True
+        if self.protocol == "sixel":
+            columns, rows, cell_width, cell_height, background = key
+            box = (columns * cell_width, rows * cell_height)
+
+            def fit(picture):
+                return _fit_into(picture, box)
+
+            def encode(picture):
+                # Opaque everywhere: a transparent pixel would let the last frame show.
+                flat = Pillow.new("RGBA", picture.size, (*background, 255))
+                flat.alpha_composite(picture)
+                return sixel.encode(flat.crop((0, 0, flat.width, flat.height - flat.height % 6))).encode("ascii")
+        else:
+            columns, rows = key
+
+            def fit(picture):
+                return picture.resize((columns, rows * 2), Pillow.Resampling.LANCZOS)
+
+            def encode(picture):
+                return picture.tobytes()
+
+        def work() -> None:
+            try:
+                moving = frames.encoded_frames(self.image, fit, encode)
+            except Exception:
+                moving = None
+            self.app.call_from_thread(self._prepared, key, moving)
+
+        # Later: this is asked for while drawing (render_line, or painting after a frame).
+        self.call_later(self.run_worker, work, thread=True, exit_on_error=False)
+
+    def _prepared(self, key: tuple, moving) -> None:
+        self._preparing = False
+        if not self.is_attached:
+            return
+        if moving is None:
+            self._animating = False  # too long or too big: still
+        else:
+            self._steps, self._steps_key, self._step_strips = moving[0], key, {}
+            self._step_index %= len(self._steps)
+            self._schedule_step()
+        if self.protocol == "halfblock":
+            self.refresh()  # its frames, or (if it moved on meanwhile) a new size to prepare
+        elif self._animating and self._steps_key != self._sixel_key():
+            self._prepare_steps(self._sixel_key())  # resized while encoding
+        else:
+            self._repaint()
+
+    def _sixel_key(self) -> tuple:
+        columns, rows = self.content_size
+        background = self.background_colors[1].rgb
+        return (columns, rows, *cell_size(), background)
+
+    def _fully_visible(self) -> bool:
+        if not self.is_attached:
+            return False
+        content = self.content_region
+        return self._visible(self.screen) == (content.x, content.y, content.width, content.height)
 
     # Overlay protocols: painted at the cursor after each frame ---------------------------
 
@@ -298,7 +416,7 @@ class Image(Widget):
             box = (columns * cell_width, rows * cell_height)
             scale = min(box[0] / self.image_width, box[1] / self.image_height)
             size = (max(1, round(self.image_width * scale)), max(1, round(self.image_height * scale)))
-            picture = self.image.convert("RGBA").resize(size, Pillow.Resampling.LANCZOS)
+            picture = self._picture.convert("RGBA").resize(size, Pillow.Resampling.LANCZOS)
             canvas = Pillow.new("RGBA", box, (0, 0, 0, 0))
             canvas.paste(picture, ((box[0] - size[0]) // 2, (box[1] - size[1]) // 2))
             self._canvas = (key, canvas)
@@ -328,6 +446,15 @@ class Image(Widget):
                 self._sent_box = canvas.size
             _registry.touch(self._image_id)
             return codes + move + kitty.place_here(self._image_id, width, height, crop)
+        if self.protocol == "sixel" and self._animating:
+            # Stepped: each frame encoded once, for the whole picture. Partly visible, it
+            # shows still (below) until it's whole again.
+            steps_key = self._sixel_key()
+            if self._steps and self._steps_key == steps_key:
+                if crop == (0, 0, canvas.width, canvas.height):
+                    return move + self._steps[self._step_index][0].decode("ascii")
+            else:
+                self._prepare_steps(steps_key)
         key = (self.protocol, crop, canvas.size)
         if self._crop_cache is None or self._crop_cache[0] != key:
             left, top, crop_width, crop_height = crop
@@ -357,20 +484,9 @@ class Image(Widget):
 
     def _canvas_frames(self, canvas) -> list | None:
         """The animation's frames, each fitted and padded like the canvas (cached)."""
-        from PIL import Image as Pillow
-
         key = canvas.size
         if self._frames is None or self._frames[0] != key:
-            box = canvas.size
-
-            def fit(picture):
-                scale = min(box[0] / picture.width, box[1] / picture.height)
-                size = (max(1, round(picture.width * scale)), max(1, round(picture.height * scale)))
-                padded = Pillow.new("RGBA", box, (0, 0, 0, 0))
-                padded.paste(picture.resize(size, Pillow.Resampling.LANCZOS), ((box[0] - size[0]) // 2, (box[1] - size[1]) // 2))
-                return padded
-
-            moving = frames.frames(self.image, fit, max_bytes=self._frame_budget())
+            moving = frames.frames(self.image, lambda picture: _fit_into(picture, key), max_bytes=self._frame_budget())
             if moving is None:
                 self._animating = False  # too long or too big: still
             self._frames = (key, moving or [])
@@ -442,10 +558,8 @@ class Image(Widget):
         codes.append(kitty.place(self._image_id, columns, rows))
         self._paused = False
         if len(encoded) > 1 and self._animation == "stepped":
-            first = not self._steps
             self._steps, self._step_index = encoded, 0
-            if first:
-                self.set_timer(encoded[0][1] / 1000, self._step)
+            self._schedule_step()
         self._write("".join(codes))
         _registry.add(self._image_id, decoded, self)
         self._sent_box, self._placed, self._sending = box, (columns, rows), False
@@ -476,6 +590,42 @@ class Image(Widget):
 
 OVERLAY = ("iterm2", "kitty-direct", "sixel")
 """Protocols that paint at the cursor, after Textual has drawn the frame."""
+
+STEPPED = ("kitty", "sixel", "halfblock")
+"""Protocols cellpix can animate itself, a frame at a time."""
+
+HALFBLOCK_CACHE_CELLS = 400_000
+"""Half-block animations up to this many cells (frames x cells) keep every frame's
+strips; bigger ones draw each frame as it comes."""
+
+
+def _strips(picture, columns: int, rows: int) -> list[Strip]:
+    """A picture as half-block lines."""
+    strips = []
+    for line in halfblock.cells(picture, columns, rows):
+        segments = [
+            Segment(
+                halfblock.UPPER_HALF,
+                Style(
+                    color=Color.from_rgb(*upper) if upper else None,
+                    bgcolor=Color.from_rgb(*lower) if lower else None,
+                ),
+            )
+            for upper, lower in line
+        ]
+        strips.append(Strip(Segment.simplify(segments), columns))
+    return strips
+
+
+def _fit_into(picture, box: tuple[int, int]):
+    """The picture fitted (aspect kept) and centred in a transparent RGBA box."""
+    from PIL import Image as Pillow
+
+    scale = min(box[0] / picture.width, box[1] / picture.height)
+    size = (max(1, round(picture.width * scale)), max(1, round(picture.height * scale)))
+    padded = Pillow.new("RGBA", box, (0, 0, 0, 0))
+    padded.paste(picture.convert("RGBA").resize(size, Pillow.Resampling.LANCZOS), ((box[0] - size[0]) // 2, (box[1] - size[1]) // 2))
+    return padded
 
 
 def _animation_mode(protocol: str) -> str:

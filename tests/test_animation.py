@@ -48,12 +48,16 @@ def test_which_terminals_play_animations(monkeypatch):
     assert Capabilities("kitty", terminal="iterm2", version="3.7.7").animation == "stepped"
     assert Capabilities("kitty-direct", terminal="wezterm").animation == ""  # would flicker
     assert Capabilities("iterm2", terminal="wezterm").animation == "native"
-    assert Capabilities("sixel", terminal="foot").animation == ""
+    assert Capabilities("sixel", terminal="foot").animation == "stepped"  # repainted per frame
+    assert Capabilities("halfblock").animation == "stepped"
+    assert Capabilities("off").animation == ""
     monkeypatch.setenv("CELLPIX_ANIMATION", "native")
     assert Capabilities("kitty", terminal="ghostty", version="1.3.1").animation == "native"
-    assert Capabilities("sixel", terminal="foot").animation == ""  # Sixel can't, whatever
+    assert Capabilities("sixel", terminal="foot").animation == "stepped"  # never native
     monkeypatch.setenv("CELLPIX_ANIMATION", "0")
     assert Capabilities("kitty", terminal="kitty").animation == ""
+    assert Capabilities("sixel", terminal="foot").animation == ""
+    assert Capabilities("halfblock").animation == ""
 
 
 class _App(App):
@@ -199,6 +203,48 @@ async def test_a_long_gif_over_the_terminals_budget_is_stepped_and_reserves_two_
     ct.configure(Capabilities("halfblock"))
     assert widget.animated and widget._animation == "stepped" and len(widget._steps) == 228
     assert 0 < reserved <= 2 * 350 * 233 * 4  # two frames at most, not 228 (74 MB)
+
+
+async def _stepped_output(capabilities, seconds=0.8):
+    ct.configure(capabilities)
+    widget = ct.Image(_gif(gaps=(40, 40, 40)))
+    written = []
+    async with _App(widget, written).run_test() as pilot:
+        await pilot.pause(seconds)
+    ct.configure(Capabilities("halfblock"))
+    return widget, "".join(written)
+
+
+async def test_half_blocks_step_through_the_frames(monkeypatch):
+    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    ct.configure(Capabilities("halfblock", (8, 16)))
+    widget = ct.Image(_gif(gaps=(40, 40, 40)))
+    seen = set()
+    async with _App(widget, []).run_test() as pilot:
+        for _ in range(40):
+            await pilot.pause(0.02)
+            seen |= {segment.style.color.triplet for segment in widget.render_line(1) if segment.style.color}
+    ct.configure(Capabilities("halfblock"))
+    assert widget.animated and widget._animation == "stepped" and len(widget._steps) == 3
+    assert {(0, 100, 255), (60, 100, 195), (120, 100, 135)} <= {tuple(colour) for colour in seen}
+
+
+async def test_sixel_steps_through_the_frames_painting_each_whole(monkeypatch):
+    monkeypatch.delenv("CELLPIX_ANIMATION", raising=False)
+    widget, sent = await _stepped_output(Capabilities("sixel", (8, 16), terminal="foot"))
+    assert widget.animated and len(widget._steps) == 3
+    codes = re.findall(r"\x1bP0;1;0q.*?\x1b\\", sent, re.S)
+    palettes = [re.findall(r"#\d+;2;([\d;]+)", code) for code in codes[-3:]]
+    for red, blue in ((0, 255), (60, 195), (120, 135)):  # every frame, in Sixel's percentages
+        assert any(f"{red * 100 // 255};39;{blue * 100 // 255}" in palette for palette in palettes)
+    # Opaque: the letterbox is painted in the background colour, so no old frame shows.
+    assert all(len(palette) == 2 for palette in palettes) and len({palette[1] for palette in palettes}) == 1
+
+
+async def test_stepping_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("CELLPIX_ANIMATION", "0")
+    widget, sent = await _stepped_output(Capabilities("halfblock", (8, 16)), seconds=0.3)
+    assert not widget.animated and not widget._steps
 
 
 def test_two_threads_can_go_through_one_animated_picture():
