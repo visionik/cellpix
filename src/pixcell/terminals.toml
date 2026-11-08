@@ -21,6 +21,7 @@ match.term_program = ["kitty"]
 match.term = ["xterm-kitty"]
 kitty.placeholders = true
 kitty.frame_edit = true
+kitty.frame_edit_reply = true
 kitty.animation = true
 kitty.shm = true
 kitty.max_escape_bytes = 262144
@@ -30,6 +31,7 @@ kitty.fastest_format = "zlib"
 [terminal.evidence]
 "kitty.placeholders" = "eye 2026-11-07, Kitty 0.50.0 (pixcell)"
 "kitty.frame_edit" = "eye 2026-11-07, Kitty 0.50 (pixcell); soak 2026-10-24, 0.49.2 (sdl-kitty)"
+"kitty.frame_edit_reply" = "probe 2026-11-08, 0.50.0: a=f answers Gi=...;OK (sdl-kitty)"
 "kitty.animation" = "eye 2026-11-07, Kitty 0.50 (pixcell)"
 "kitty.shm" = "graphics.c: t=s first-class; soak 2026-10-24 (sdl-kitty)"
 "kitty.max_escape_bytes" = "vt-parser.c MAX_ESCAPE_CODE_LENGTH = 262144; longer escape codes are ignored (sdl-kitty)"
@@ -144,6 +146,7 @@ match.term_program = ["iTerm.app"]
 kitty.placeholders = true
 kitty.frame_edit = false
 kitty.animation = false
+kitty.shm = true
 kitty.fastest_format = "png"
 iterm2.gif_animation = true
 
@@ -151,5 +154,6 @@ iterm2.gif_animation = true
 "kitty.placeholders" = "eye 2026-11-07, 3.7.7; older versions don't answer the graphics query (pixcell)"
 "kitty.frame_edit" = "eye 2026-11-07, 3.7.7: the picture stays on its first frame (pixcell)"
 "kitty.animation" = "eye 2026-11-07, 3.7.7 (pixcell)"
+"kitty.shm" = "probe and eye 2026-11-08, 3.7.7: t=s a=q OK; dvd_sprite full frames over t=s draw right (sdl-kitty)"
 "kitty.fastest_format" = "tools/decode_bench.py: raw pixels slow, PNG quick (pixcell)"
 "iterm2.gif_animation" = "eye 2026-11-07, 3.7.7; source: iTermImage decodes every GIF frame, no frame limit (pixcell)"
