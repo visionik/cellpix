@@ -115,3 +115,30 @@ async def test_overlay_frames_are_painted_over_without_a_redraw():
     paints = updates.count("\x1b]1337;File=")
     assert paints >= 3  # each new frame painted
     assert live.bytes_sent > 0  # and counted
+
+
+async def test_overlay_frames_fill_the_box_whatever_size_it_started_at():
+    """The bug: overlay protocols fitted each frame by the size the LiveImage was made
+    with (1280x800 here), not the frame's own: a frame made for the widget's box was
+    squeezed to 1.6:1 and letterboxed (too narrow in a wide pane, too short in a tall
+    one). Console's browser pushes frames the box's size; in WezTerm (iTerm2 images)
+    the page came out narrower than its pane."""
+    import base64
+    import io
+
+    for protocol in ("iterm2", "sixel", "kitty-direct"):
+        ct.configure(Capabilities(protocol, (8, 16), terminal="wezterm"))
+        live = LiveImage((1280, 800), fps=50)  # 20x5 cells of 8x16: a 160x80 box (2:1)
+        written = []
+        async with _App(live, written).run_test() as pilot:
+            await pilot.pause(0.2)
+            live.push(PILImage.new("RGB", (160, 80), (200, 30, 30)))
+            await pilot.pause(0.2)
+            canvas = live._canvas[1]
+        ct.configure(Capabilities("halfblock"))
+        assert canvas.size == (160, 80)
+        assert canvas.getchannel("A").getextrema() == (255, 255), protocol  # no letterbox
+        if protocol == "iterm2":
+            payload = re.findall(r"1337;File=[^:]*:([^\x07]*)\x07", "".join(written))[-1]
+            painted = PILImage.open(io.BytesIO(base64.b64decode(payload))).convert("RGBA")
+            assert painted.getchannel("A").getextrema() == (255, 255)

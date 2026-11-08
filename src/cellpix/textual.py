@@ -420,20 +420,14 @@ class Image(Widget):
 
     def _overlay_canvas(self) -> tuple[PILImage, tuple[int, int]]:
         """The picture fitted (aspect kept, centred) into the widget's cells, as RGBA the
-        exact pixel size of those cells, so any group of cells is a clean crop."""
-        from PIL import Image as Pillow
-
+        exact pixel size of those cells, so any group of cells is a clean crop. Fitted by
+        the picture's own size: a LiveImage's frames needn't be the size it started at."""
         columns, rows = self.content_size
         cell_width, cell_height = cell_size()
         key = (columns, rows, cell_width, cell_height)
         if self._canvas is None or self._canvas[0] != key:
             box = (columns * cell_width, rows * cell_height)
-            scale = min(box[0] / self.image_width, box[1] / self.image_height)
-            size = (max(1, round(self.image_width * scale)), max(1, round(self.image_height * scale)))
-            picture = self._picture.convert("RGBA").resize(size, Pillow.Resampling.LANCZOS)
-            canvas = Pillow.new("RGBA", box, (0, 0, 0, 0))
-            canvas.paste(picture, ((box[0] - size[0]) // 2, (box[1] - size[1]) // 2))
-            self._canvas = (key, canvas)
+            self._canvas = (key, _fit_into(self._picture, box))
             if self.protocol == "kitty-direct" and self._sent_box is not None:
                 self._write(kitty.delete(self._image_id))  # the old size's data
                 _registry.remove(self._image_id)
