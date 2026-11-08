@@ -411,23 +411,27 @@ class Image(Widget):
 
         moving = None
         if self._animating:
-            moving = frames.frames(self.image, fit, max_bytes=self._frame_budget())
-            if moving is None and self._animation == "native":
+            # Encoded as they're decoded: only the PNGs are kept, so long GIFs fit too.
+            moving = frames.encoded_frames(self.image, fit, _png)
+            if moving is not None and self._animation == "native" and moving[2] > self._frame_budget():
                 # Too big for the terminal to keep every frame: step through them instead
                 # (it then holds two at a time).
-                moving = frames.frames(self.image, fit, max_bytes=frames.MAX_BYTES)
-                if moving is not None:
-                    self.app.call_from_thread(setattr, self, "_animation", "stepped")
+                self.app.call_from_thread(setattr, self, "_animation", "stepped")
             if moving is None:
                 self.app.call_from_thread(setattr, self, "_animating", False)  # still, then
-        pictures = moving or [(fit(self.image), 0)]
-        encoded = [(_png(picture), gap) for picture, gap in pictures]
-        self.app.call_from_thread(self._sent, encoded, pictures[0][0].size, box, columns, rows)
+        if moving is not None:
+            encoded, size, _decoded = moving
+        else:
+            first = fit(self.image)
+            encoded, size = [(_png(first), 0)], first.size
+        self.app.call_from_thread(self._sent, encoded, size, box, columns, rows)
 
     def _sent(self, encoded: list, size: tuple[int, int], box: tuple[int, int], columns: int, rows: int) -> None:
         if not self.is_attached:
             return
-        decoded = size[0] * size[1] * 4 * len(encoded)  # what the terminal keeps (every frame)
+        # What the terminal keeps: every frame when it plays them, two when stepped.
+        kept = len(encoded) if self._animation == "native" else min(2, len(encoded))
+        decoded = size[0] * size[1] * 4 * kept
         codes = [kitty.delete(old) for old in _registry.make_room(decoded, keep=self._image_id)]
         if self._sent_box is not None:
             codes.append(kitty.delete(self._image_id))  # replacing its data needs a delete

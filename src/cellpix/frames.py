@@ -1,8 +1,17 @@
 """Frames of an animated picture (GIF, WebP, APNG), ready to send.
 
 Pillow composes each frame (disposal and blending handled), so every frame here is a
-whole picture. Long or huge animations stay still: :data:`MAX_FRAMES` frames at most,
-and no more than :data:`MAX_BYTES` once decoded (the terminal keeps every frame).
+whole picture.
+
+Two ways to get them:
+
+- :func:`frames`: every frame decoded, for when they're all needed at once (iTerm2's
+  GIFs). :data:`MAX_FRAMES` frames at most, :data:`MAX_BYTES` decoded.
+- :func:`encoded_frames`: each frame encoded (e.g. to PNG) as soon as it's decoded, and
+  only the encoded copy kept, with the decoded size counted. That's what a terminal is
+  sent; it allows far longer animations (:data:`MAX_STEPPED_FRAMES`,
+  :data:`MAX_ENCODED_BYTES`), and the caller decides from the decoded size whether the
+  terminal can keep every frame or should be stepped through them.
 """
 
 from __future__ import annotations
@@ -14,6 +23,10 @@ if TYPE_CHECKING:
 
 MAX_FRAMES = 200
 MAX_BYTES = 48 * 1024 * 1024
+MAX_STEPPED_FRAMES = 3000
+"""Frames at most for :func:`encoded_frames` (a 2-minute GIF at 25 frames a second)."""
+MAX_ENCODED_BYTES = 96 * 1024 * 1024
+"""Encoded bytes at most for :func:`encoded_frames` (kept in memory to step through)."""
 DEFAULT_GAP = 100
 """Milliseconds for a frame that doesn't say (browsers use about this)."""
 MIN_GAP = 20
@@ -52,3 +65,41 @@ def frames(
     finally:
         image.seek(position)
     return result if len(result) > 1 else None
+
+
+def encoded_frames(
+    image: "Image",
+    fit: Callable[["Image"], "Image"],
+    encode: Callable[["Image"], bytes],
+    *,
+    max_frames: int = MAX_STEPPED_FRAMES,
+    max_encoded: int = MAX_ENCODED_BYTES,
+) -> tuple[list[tuple[bytes, int]], tuple[int, int], int] | None:
+    """Every frame encoded (after ``fit``) with its gap in milliseconds, the frames' size,
+    and the bytes they'd take decoded (what a terminal keeps to play them itself); or None
+    if the picture isn't animated, or is too long or too big even encoded. Each decoded
+    frame is dropped once encoded, so memory goes to the encoded frames only."""
+    from PIL import ImageSequence
+
+    if not is_animated(image):
+        return None
+    if getattr(image, "n_frames", 1) > max_frames:
+        return None
+    result: list[tuple[bytes, int]] = []
+    size = (0, 0)
+    decoded = encoded = 0
+    position = image.tell()
+    try:
+        for picture in ImageSequence.Iterator(image):
+            gap = picture.info.get("duration") or DEFAULT_GAP
+            fitted = fit(picture.convert("RGBA"))
+            size = fitted.size
+            decoded += fitted.width * fitted.height * 4
+            data = encode(fitted)
+            encoded += len(data)
+            if encoded > max_encoded:
+                return None
+            result.append((data, max(MIN_GAP, int(gap))))
+    finally:
+        image.seek(position)
+    return (result, size, decoded) if len(result) > 1 else None
