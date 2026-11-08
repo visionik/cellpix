@@ -13,6 +13,12 @@ from the last frame shown, as an in-place edit of the image (``a=f`` with ``r=1`
 in the format the terminal takes in fastest (raw pixels + zlib; PNG for iTerm2). Where
 edits aren't known to redraw, whole frames are swapped between two image ids instead.
 Overlay protocols (Sixel, iTerm2, Kitty placements) and half blocks repaint the widget.
+
+Sixel is encoded on the main thread, each frame. Checked by eye (2026-11-07) in WezTerm
+20240203, a detailed page scrolling (``python -m cellpix live 30 scroll``): 30 fps at
+560x384 pixels, ~25 ms of main thread and ~112 KB a frame. Transparent pixels aren't
+painted, so a frame with transparency (or a letterbox that moves) would leave the last
+frame's pixels there; frames without it, as here, are fine.
 """
 
 from __future__ import annotations
