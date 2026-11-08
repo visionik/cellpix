@@ -30,7 +30,7 @@ from textual.strip import Strip
 from textual.widget import Widget
 
 from pixcell import frames, halfblock, iterm2, kitty, sixel
-from pixcell.probe import ITERM2_GIFS, Capabilities, detect
+from pixcell.probe import Capabilities, detect
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -702,7 +702,7 @@ def _better_for_animation(mode: str) -> tuple[str, str] | None:
     found = _capabilities
     if found.tmux or found.reason == "PIXCELL_PROTOCOL" or os.environ.get("PIXCELL_ANIMATION") == "0":
         return None
-    if "iterm2" in found.supported and found.terminal in ITERM2_GIFS:
+    if "iterm2" in found.supported and found.fact("iterm2.gif_animation") is True:
         return "iterm2", "native"  # the terminal plays a GIF itself
     if not mode and "sixel" in found.supported:
         return "sixel", "stepped"  # repainted frame by frame

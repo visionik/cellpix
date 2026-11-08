@@ -1,0 +1,155 @@
+# What terminals really do, for programs that draw pictures in them.
+#
+# Facts only: measured or documented properties of a terminal, the same whatever
+# program reads them. Each program turns facts into its own policy (sizes, timings,
+# fallbacks) in its own code or config. What a terminal answers when asked (the Kitty
+# graphics query, Sixel in device attributes...) is asked at run time, not listed here.
+#
+# A fact left out is unknown: probe, or use your own default.
+# Format: SPEC.md. Used by pixcell (Python) and sdl-kitty (C).
+
+schema = 1
+
+# --- Kitty --------------------------------------------------------------------------
+
+[[terminal]]
+id = "kitty"
+name = "Kitty"
+match.xtversion = ["kitty"]
+match.env = ["KITTY_WINDOW_ID"]
+match.term_program = ["kitty"]
+match.term = ["xterm-kitty"]
+kitty.placeholders = true
+kitty.frame_edit = true
+kitty.animation = true
+kitty.shm = true
+kitty.max_escape_bytes = 262144
+kitty.storage_bytes = 335544320
+kitty.fastest_format = "zlib"
+
+[terminal.evidence]
+"kitty.placeholders" = "eye 2026-11-07, Kitty 0.50.0 (pixcell)"
+"kitty.frame_edit" = "eye 2026-11-07, Kitty 0.50 (pixcell); soak 2026-10-24, 0.49.2 (sdl-kitty)"
+"kitty.animation" = "eye 2026-11-07, Kitty 0.50 (pixcell)"
+"kitty.shm" = "graphics.c: t=s first-class; soak 2026-10-24 (sdl-kitty)"
+"kitty.max_escape_bytes" = "vt-parser.c MAX_ESCAPE_CODE_LENGTH = 262144; longer escape codes are ignored (sdl-kitty)"
+"kitty.storage_bytes" = "graphics.c storage limit 320 MiB (sdl-kitty note)"
+"kitty.fastest_format" = "tools/decode_bench.py: raw + zlib cheapest to take in (pixcell)"
+
+# --- Ghostty ------------------------------------------------------------------------
+
+[[terminal]]
+id = "ghostty"
+name = "Ghostty"
+match.xtversion = ["ghostty"]
+match.env = ["GHOSTTY_RESOURCES_DIR"]
+match.term_program = ["ghostty"]
+match.term_substring = ["ghostty"]
+kitty.placeholders = true
+kitty.frame_edit = true
+kitty.animation = true
+kitty.shm = true
+kitty.max_escape_bytes = 68157440
+kitty.storage_bytes = 320000000
+kitty.fastest_format = "zlib"
+
+[terminal.evidence]
+"kitty.placeholders" = "eye 2026-11-07, Ghostty 1.4.0 (pixcell)"
+"kitty.frame_edit" = "1.4.0 release notes; soak 2026-10-27, 1.4.0 (sdl-kitty)"
+"kitty.animation" = "eye 2026-11-07, Ghostty 1.4.0 (pixcell)"
+"kitty.shm" = "soak 2026-10-24 (sdl-kitty)"
+"kitty.max_escape_bytes" = "apc.zig Protocol.defaultMaxBytes(.kitty) = 65 MiB, still in 1.4.0 (sdl-kitty)"
+"kitty.storage_bytes" = "default image-storage-limit 320 MB (sdl-kitty note; decimal MB not rechecked)"
+"kitty.fastest_format" = "tools/decode_bench.py: raw + zlib cheapest to take in (pixcell)"
+
+[[terminal]]
+id = "ghostty-1.3"
+extends = "ghostty"
+match.version_max = "1.3.1"
+kitty.frame_edit = false
+kitty.animation = false
+
+[terminal.evidence]
+"kitty.frame_edit" = "a=f unimplemented in 1.3.1 (sdl-kitty soak 2026-10-24)"
+"kitty.animation" = "eye 2026-11-07, Ghostty 1.3.1 lacks a=f (pixcell)"
+
+# --- Rex ----------------------------------------------------------------------------
+
+[[terminal]]
+id = "rex"
+name = "Rex"
+match.xtversion = ["rex"]
+match.env = ["REX_SESSION"]
+match.term_program = ["rex"]
+kitty.placeholders = true
+kitty.frame_edit = true
+kitty.frame_edit_reply = false
+kitty.animation = true
+kitty.shm = false
+kitty.storage_bytes = 10000000
+kitty.fastest_format = "zlib"
+window.ioctl_pixels = false
+
+[terminal.evidence]
+"kitty.placeholders" = "eye 2026-11-07 (pixcell)"
+"kitty.frame_edit" = "eye 2026-11-07 (pixcell); soak 2026-10-23 (sdl-kitty)"
+"kitty.frame_edit_reply" = "a=f probe often gets no reply, yet the edit shows (sdl-kitty silent_af_ok)"
+"kitty.animation" = "eye 2026-11-07 (pixcell)"
+"kitty.shm" = "a=q with t=s often silent or failing; a forced t=s a=T does present (sdl-kitty soak 2026-10-23)"
+"kitty.storage_bytes" = "libghostty Screen.zig kitty_image_storage_limit = 10 MB (sdl-kitty note; decimal MB not rechecked)"
+"kitty.fastest_format" = "tools/decode_bench.py (pixcell); prefer_zlib soak 2026-10-24 (sdl-kitty)"
+"window.ioctl_pixels" = "TIOCGWINSZ pixel sizes disagree with its escape-code answers (pixcell, sdl-kitty: HiDPI stub)"
+
+# --- WezTerm ------------------------------------------------------------------------
+
+[[terminal]]
+id = "wezterm"
+name = "WezTerm"
+match.xtversion = ["wezterm"]
+match.env = ["WEZTERM_EXECUTABLE"]
+match.term_program = ["wezterm"]
+match.term_substring = ["wezterm"]
+kitty.placeholders = false
+kitty.frame_edit = false
+kitty.animation = false
+kitty.fastest_format = "zlib"
+iterm2.gif_animation = false
+keyboard.kitty_protocol_config = "enable_kitty_keyboard = true (wezterm.lua)"
+
+[terminal.evidence]
+"kitty.placeholders" = "eye 2026-11-07, 20240203: answers the graphics query but doesn't draw placeholders properly (pixcell)"
+"kitty.frame_edit" = "wezterm#8281: a=f changes pixels but the display never refreshes, 20240203 (sdl-kitty)"
+"kitty.animation" = "inferred from kitty.frame_edit (frames are a=f); not checked separately"
+"kitty.fastest_format" = "tools/decode_bench.py (pixcell); prefer_zlib soak (sdl-kitty)"
+"iterm2.gif_animation" = "eye 2026-11-07, 20240203: shows the first frame only (pixcell)"
+"keyboard.kitty_protocol_config" = "without it CSI > 11 u is ignored, arrows fall back to OS repeat (sdl-kitty 2026-10-25)"
+
+[[terminal]]
+id = "wezterm-macos"
+extends = "wezterm"
+match.os = ["macos"]
+kitty.shm = false
+
+[terminal.evidence]
+"kitty.shm" = "wezterm#8063: t=s seek/read gives ENXIO on macOS (sdl-kitty)"
+
+# --- iTerm2 -------------------------------------------------------------------------
+
+[[terminal]]
+id = "iterm2"
+name = "iTerm2"
+match.xtversion = ["iterm2"]
+match.env = ["ITERM_SESSION_ID"]
+match.term_program = ["iTerm.app"]
+kitty.placeholders = true
+kitty.frame_edit = false
+kitty.animation = false
+kitty.fastest_format = "png"
+iterm2.gif_animation = true
+
+[terminal.evidence]
+"kitty.placeholders" = "eye 2026-11-07, 3.7.7; older versions don't answer the graphics query (pixcell)"
+"kitty.frame_edit" = "eye 2026-11-07, 3.7.7: the picture stays on its first frame (pixcell)"
+"kitty.animation" = "eye 2026-11-07, 3.7.7 (pixcell)"
+"kitty.fastest_format" = "tools/decode_bench.py: raw pixels slow, PNG quick (pixcell)"
+"iterm2.gif_animation" = "eye 2026-11-07, 3.7.7; source: iTermImage decodes every GIF frame, no frame limit (pixcell)"

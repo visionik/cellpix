@@ -5,7 +5,7 @@ description = "Images in terminal cells: Kitty graphics (Unicode placeholders), 
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = ["pillow>=10.3"]
 classifiers = [
     "Environment :: Console",
