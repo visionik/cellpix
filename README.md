@@ -14,7 +14,8 @@ Images in terminal cells, MIT-licensed. (Formerly *cellpix*; renamed in 0.3.0, w
   Ghostty 1.4+, Rex, iTerm2), otherwise stepped through by pixcell, a frame at a time
   (other placeholder terminals, Sixel, half blocks). In WezTerm, which shows iTerm2 GIFs
   still, moving pictures go to Sixel. `pixcell.textual.animations_play()` says whether
-  they move here; `PIXCELL_ANIMATION=0` keeps them still.
+  they move here, and a widget's `still_reason` why one doesn't; `PIXCELL_ANIMATION=0`
+  keeps them still.
 - **Live pictures** (`pixcell.live.LiveImage`): push frames from any thread (a browser
   view, a camera, a game); only what changed is sent where the terminal allows, and
   clicks come back in the frame's own pixels.
