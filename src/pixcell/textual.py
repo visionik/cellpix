@@ -13,6 +13,10 @@ clips with everything else. The picture itself is sent once, scaled to the size 
 shown at, and deleted again when the widget goes away. A budget keeps the terminal's
 image memory in check: pictures not drawn for a while are deleted first, and sent again
 if they come back into view.
+
+Each :class:`Image` says where it is, for a user or an agent asking why a picture looks
+as it does: :attr:`Image.upload` (Kitty: ``unsent``, ``sending``, ``shown``, ``failed``),
+:attr:`Image.animated` and :attr:`Image.still_reason` (why an animation stays still).
 """
 
 from __future__ import annotations
@@ -92,17 +96,21 @@ class _Registry:
             self._sent[image_id] = (entry[0], time.monotonic(), entry[2])
 
     def make_room(self, size: int, keep: int) -> list[int]:
-        """Evict the least recently drawn pictures until `size` fits; their ids."""
-        evicted = []
+        """Evict the least recently drawn pictures until `size` fits; the ids to delete.
+        A widget is evicted whole (both buffers of a double-buffered one), and never the
+        widget that `keep` belongs to."""
+        evicted: list[int] = []
         now = time.monotonic()
+        keeping = self._sent[keep][2] if keep in self._sent else None
         for image_id, (bytes_used, drawn, widget) in sorted(self._sent.items(), key=lambda item: item[1][1]):
             if self.used + size <= self.budget:
                 break
-            if image_id == keep or now - drawn < self.KEEP_SECONDS:
+            if image_id not in self._sent or image_id == keep or widget is keeping or now - drawn < self.KEEP_SECONDS:
                 continue
-            del self._sent[image_id]
-            widget._evicted()
-            evicted.append(image_id)
+            held = widget._evicted() or [image_id]
+            for each in (image_id, *held):
+                if self._sent.pop(each, None) is not None:
+                    evicted.append(each)
         return evicted
 
     def add(self, image_id: int, size: int, widget: Image) -> None:
@@ -148,16 +156,23 @@ class Image(Widget):
         self.protocol = wanted if wanted in ("kitty", "halfblock", "off", *OVERLAY) else "halfblock"
         self.image_width, self.image_height = image.size
         self._image_id = kitty.new_image_id()
+        # Kitty protocols: the picture in the terminal (see `upload` for the states).
+        self._upload = "unsent"
+        self._failed_cells: tuple[int, int] | None = None  # "failed": the size it failed at
         self._sent_box: tuple[int, int] | None = None  # pixel box the sent copy was made for
         self._placed: tuple[int, int] | None = None  # cells of the current placement
-        self._sending = False
+        # Double buffer (stepped animation, LiveImage without edits): the next frame goes to
+        # the spare id, then the two swap. After a swap the spare still holds a frame.
+        self._spare_id = kitty.new_image_id()
+        self._spare_holds = False
         self._halfblock: tuple[tuple[int, int], list[Strip]] | None = None
         # Overlay protocols: what was painted where, and the picture fitted to its box.
         self._painted: tuple[int, int, int, int] | None = None  # visible region, screen cells
         self._canvas: tuple[tuple[int, int, int, int], PILImage] | None = None
         self._crop_cache: tuple[tuple, str] | None = None
         # Animation: played by the terminal where it can, else stepped through by us.
-        wants = (_animate if animate is None else animate) and frames.is_animated(image)
+        moving = frames.is_animated(image)
+        wants = (_animate if animate is None else animate) and moving
         mode = _animation_mode(self.protocol) if wants else ""
         if wants and mode != "native" and protocol is None and (better := _better_for_animation(mode)):
             # e.g. iTerm2: placeholders for still pictures, its own GIFs for moving ones;
@@ -165,8 +180,18 @@ class Image(Widget):
             self.protocol, mode = better
         if mode == "stepped" and self.protocol not in STEPPED:
             mode = ""  # Kitty placements at the cursor would flicker
+        # How it moves: "native" (the terminal plays it), "stepped" (we show each frame),
+        # or "" (still: `still_reason` says why). It only ever goes native -> stepped
+        # (too big for the terminal to keep) or to "" (too long or too big at all).
         self._animation = mode
-        self._animating = bool(mode)
+        if mode:
+            self._still_reason = ""
+        elif not moving:
+            self._still_reason = "not an animation"
+        elif not wants or os.environ.get("PIXCELL_ANIMATION") == "0":
+            self._still_reason = "animations are off"
+        else:
+            self._still_reason = f"{self.protocol} can't animate here"
         self._frames: tuple[tuple, list] | None = None  # (key, [(canvas frame, gap ms)])
         self._paused = False
         # Stepped animation: each frame encoded for the protocol (Kitty: PNG; Sixel: the
@@ -178,10 +203,9 @@ class Image(Widget):
         self._stepping = False  # a step timer is pending
         self._preparing = False  # a worker is encoding frames (Sixel, half blocks)
         self._step_strips: dict[int, list[Strip]] = {}  # half blocks: frames drawn as strips
-        self._spare_id = kitty.new_image_id()  # stepped Kitty: the other buffer
         # The first frame, for drawing still on the main thread while a worker steps
         # through the animation's frames (seeking the image as it goes).
-        self._first = image.copy() if self._animating else None
+        self._first = image.copy() if mode else None
         self._gif: tuple[tuple[int, int], bytes] | None = None  # iTerm2: (canvas size, GIF)
 
     @property
@@ -193,7 +217,48 @@ class Image(Widget):
     def animated(self) -> bool:
         """Is this picture moving (an animation the terminal plays)? False for a still
         picture, and for an animation shown still (not supported here, or too long)."""
-        return self._animating
+        return bool(self._animation)
+
+    @property
+    def still_reason(self) -> str:
+        """Why the picture doesn't move (``""`` while it does): ``not an animation``,
+        ``animations are off``, ``<protocol> can't animate here``, or ``too long or too
+        big`` (found once its frames are decoded)."""
+        return self._still_reason
+
+    @property
+    def upload(self) -> str:
+        """The picture in the terminal, for the Kitty protocols (``unsent`` elsewhere):
+
+        - ``unsent``: not in the terminal (not drawn yet, evicted, or unmounted);
+        - ``sending``: being encoded and sent, for the size it's drawn at;
+        - ``shown``: sent, and placed at the size it's drawn at;
+        - ``failed``: couldn't be encoded; tried again only at another size.
+
+        ``unsent``/``shown``/``failed`` -> ``sending`` when drawn at a size it isn't
+        placed at; ``sending`` -> ``shown`` or ``failed``; -> ``unsent`` on eviction or
+        unmount (``sending`` stays on eviction: its picture is still on the way)."""
+        return self._upload
+
+    def _stop_animating(self, reason: str) -> None:
+        """Still from now on (the first frame), saying why."""
+        self._animation, self._still_reason = "", reason
+
+    def _mark_sent(self, box: tuple[int, int], placed: tuple[int, int] | None) -> None:
+        self._sent_box, self._placed, self._upload, self._failed_cells = box, placed, "shown", None
+
+    def _forget_sent(self) -> None:
+        """The terminal no longer has the picture (its data was deleted)."""
+        self._sent_box = self._placed = None
+        if self._upload != "sending":
+            self._upload = "unsent"
+
+    def _swap_buffers(self, frame_bytes: int) -> None:
+        """The spare id now holds the newest frame, placed: show it, keep the other as spare."""
+        _registry.add(self._spare_id, frame_bytes, self)
+        self._image_id, self._spare_id = self._spare_id, self._image_id
+        self._spare_holds = True
+        self.refresh()  # the placeholder text now names the new image
 
     # Size ------------------------------------------------------------------------------
 
@@ -220,16 +285,18 @@ class Image(Widget):
     def _kitty_line(self, y: int, columns: int, rows: int) -> Strip:
         columns, rows = min(columns, kitty.MAX_CELLS), min(rows, kitty.MAX_CELLS)
         if self._placed != (columns, rows) or self._sent_box is None:
-            if not self._sending:
-                self._sending = True
+            if self._upload != "sending" and not (self._upload == "failed" and self._failed_cells == (columns, rows)):
+                self._upload = "sending"
                 self.call_later(self._send, columns, rows)
         else:
             _registry.touch(self._image_id)
+            if self._spare_holds:
+                _registry.touch(self._spare_id)
         style = Style(color=Color.from_rgb(*kitty.id_colour(self._image_id)))
         return Strip([Segment(kitty.placeholder_row(self._image_id, y, columns), style)], columns)
 
     def _halfblock_lines(self, columns: int, rows: int) -> list[Strip]:
-        if self._animating:
+        if self._animation:
             if self._steps and self._steps_key == (columns, rows):
                 return self._halfblock_frame(columns, rows)
             self._prepare_steps((columns, rows))  # still until the frames are ready
@@ -256,7 +323,7 @@ class Image(Widget):
     def on_mount(self) -> None:
         if self.protocol in OVERLAY:
             _Painter.for_app(self.app).widgets.add(self)
-        if self._animating and self.protocol in STEPPED:
+        if self._animation and self.protocol in STEPPED:
             self.set_interval(0.5, self._pause_when_hidden)
 
     def _pause_when_hidden(self) -> None:
@@ -272,7 +339,7 @@ class Image(Widget):
     def _step(self) -> None:
         """Stepped animation: on to the next frame, if the current one can be shown."""
         self._stepping = False
-        if not self.is_attached or not self._animating or not self._steps:
+        if not self.is_attached or not self._animation or not self._steps:
             return
         if not self._paused and self._step_ready():
             following = self._step_index + 1
@@ -310,12 +377,9 @@ class Image(Widget):
         # don't redraw in-place edits (Rex) still show every frame.
         png = self._steps[self._step_index][0]
         columns, rows = self._placed
-        shown, spare = self._image_id, self._spare_id
+        spare = self._spare_id
         self._write(kitty.delete(spare) + kitty.transmit(spare, png) + kitty.place(spare, columns, rows))
-        _registry.remove(shown)
-        _registry.add(spare, self._sent_box[0] * self._sent_box[1] * 4, self)
-        self._image_id, self._spare_id = spare, shown
-        self.refresh()  # the placeholder text now names the new image
+        self._swap_buffers(self._sent_box[0] * self._sent_box[1] * 4)
 
     def _repaint(self) -> int:
         """Show the current frame now. Overlay pictures are painted straight over the old
@@ -389,14 +453,15 @@ class Image(Widget):
         self._steps.extend(batch)
         if done:
             if failed or len(self._steps) < 2:
-                self._animating, self._steps = False, []  # too long, too big, or still: still
+                self._stop_animating("too long or too big" if failed else "not an animation")
+                self._steps = []
             else:
                 self._steps_complete = True
-        if self._animating and self._steps:
+        if self._animation and self._steps:
             self._schedule_step()
         if self.protocol == "halfblock":
             self.refresh()  # its frames, or (if it moved on meanwhile) a new size to prepare
-        elif done and self._animating and self._steps_key != self._sixel_key():
+        elif done and self._animation and self._steps_key != self._sixel_key():
             self._prepare_steps(self._sixel_key())  # resized while encoding
         elif first or done:
             self._repaint()
@@ -455,7 +520,7 @@ class Image(Widget):
             if self.protocol == "kitty-direct" and self._sent_box is not None:
                 self._write(kitty.delete(self._image_id))  # the old size's data
                 _registry.remove(self._image_id)
-                self._sent_box = None
+                self._forget_sent()
         return self._canvas[1], (cell_width, cell_height)
 
     def _overlay_codes(self, visible: tuple[int, int, int, int]) -> str:
@@ -467,7 +532,7 @@ class Image(Widget):
         if self.protocol == "kitty-direct":
             codes = ""
             if self._sent_box is None:
-                moving = self._canvas_frames(canvas) if self._animating else None
+                moving = self._canvas_frames(canvas) if self._animation else None
                 size = canvas.width * canvas.height * 4 * (len(moving) if moving else 1)
                 codes += "".join(kitty.delete(old) for old in _registry.make_room(size, keep=self._image_id))
                 if moving:
@@ -475,10 +540,10 @@ class Image(Widget):
                 else:
                     codes += kitty.transmit(self._image_id, _png(canvas))
                 _registry.add(self._image_id, size, self)
-                self._sent_box = canvas.size
+                self._mark_sent(canvas.size, None)
             _registry.touch(self._image_id)
             return codes + move + kitty.place_here(self._image_id, width, height, crop)
-        if self.protocol == "sixel" and self._animating:
+        if self.protocol == "sixel" and self._animation:
             # Stepped: each frame encoded once, for the whole picture. Partly visible, it
             # shows still (below) until it's whole again.
             steps_key = self._sixel_key()
@@ -488,7 +553,7 @@ class Image(Widget):
             else:
                 self._prepare_steps(steps_key)
         whole = crop == (0, 0, canvas.width, canvas.height)
-        moving = self._iterm2_gif(canvas.size) if self.protocol == "iterm2" and self._animating and whole else None
+        moving = self._iterm2_gif(canvas.size) if self.protocol == "iterm2" and self._animation and whole else None
         key = (self.protocol, crop, canvas.size, moving is not None)
         if self._crop_cache is None or self._crop_cache[0] != key:
             left, top, crop_width, crop_height = crop
@@ -527,7 +592,7 @@ class Image(Widget):
     def _gif_made(self, box: tuple[int, int], data: bytes | None) -> None:
         self._preparing = False
         if data is None:
-            self._animating = False  # too long or too big: still
+            self._stop_animating("too long or too big")
         else:
             self._gif = (box, data)
         if self.is_attached:
@@ -547,7 +612,7 @@ class Image(Widget):
         if self._frames is None or self._frames[0] != key:
             moving = frames.frames(self.image, lambda picture: _fit_into(picture, key), max_bytes=self._frame_budget())
             if moving is None:
-                self._animating = False  # too long or too big: still
+                self._stop_animating("too long or too big")
             self._frames = (key, moving or [])
         return self._frames[1] or None
 
@@ -565,8 +630,7 @@ class Image(Widget):
         sent = self._sent_box
         if sent is not None and box[0] <= sent[0] * self.RESEND_GROWTH and box[1] <= sent[1] * self.RESEND_GROWTH:
             self._write(kitty.place(self._image_id, columns, rows))
-            self._placed = (columns, rows)
-            self._sending = False
+            self._mark_sent(sent, (columns, rows))
             self.refresh()
             return
         self.run_worker(lambda: self._encode(box, columns, rows), thread=True, exit_on_error=False)
@@ -575,8 +639,13 @@ class Image(Widget):
         try:
             self._encode_png(box, columns, rows)
         except Exception:
-            self.app.call_from_thread(setattr, self, "_sending", False)
+            self.app.call_from_thread(self._failed, columns, rows)
             raise
+
+    def _failed(self, columns: int, rows: int) -> None:
+        """Encoding failed: not again at this size (it would fail again, every redraw)."""
+        if self._upload == "sending":
+            self._upload, self._failed_cells = "failed", (columns, rows)
 
     def _encode_png(self, box: tuple[int, int], columns: int, rows: int) -> None:
         def fit(picture):
@@ -585,7 +654,7 @@ class Image(Widget):
             return picture if picture.mode in ("RGB", "RGBA") else picture.convert("RGBA")
 
         moving = None
-        if self._animating:
+        if self._animation:
             # Encoded as they're decoded: only the PNGs are kept, so long GIFs fit too.
             moving = frames.encoded_frames(self.image, fit, _png)
             if moving is not None and self._animation == "native" and moving[2] > self._frame_budget():
@@ -593,7 +662,7 @@ class Image(Widget):
                 # (it then holds two at a time).
                 self.app.call_from_thread(setattr, self, "_animation", "stepped")
             if moving is None:
-                self.app.call_from_thread(setattr, self, "_animating", False)  # still, then
+                self.app.call_from_thread(self._stop_animating, "too long or too big")
         if moving is not None:
             encoded, size, _decoded = moving
         else:
@@ -603,11 +672,13 @@ class Image(Widget):
 
     def _sent(self, encoded: list, size: tuple[int, int], box: tuple[int, int], columns: int, rows: int) -> None:
         if not self.is_attached:
+            self._upload = "unsent"  # unmounted while encoding
             return
-        # What the terminal keeps: every frame when it plays them, two when stepped.
+        # What the terminal keeps: every frame when it plays them, two when stepped (room
+        # for both now; each buffer is counted as it fills).
         kept = len(encoded) if self._animation == "native" else min(2, len(encoded))
-        decoded = size[0] * size[1] * 4 * kept
-        codes = [kitty.delete(old) for old in _registry.make_room(decoded, keep=self._image_id)]
+        frame_bytes = size[0] * size[1] * 4
+        codes = [kitty.delete(old) for old in _registry.make_room(frame_bytes * kept, keep=self._image_id)]
         if self._sent_box is not None:
             codes.append(kitty.delete(self._image_id))  # replacing its data needs a delete
         if len(encoded) > 1 and self._animation == "native":
@@ -620,23 +691,31 @@ class Image(Widget):
             self._steps, self._step_index, self._steps_complete = encoded, 0, True
             self._schedule_step()
         self._write("".join(codes))
-        _registry.add(self._image_id, decoded, self)
-        self._sent_box, self._placed, self._sending = box, (columns, rows), False
+        _registry.add(self._image_id, frame_bytes * (kept if self._animation == "native" else 1), self)
+        self._mark_sent(box, (columns, rows))
         self.refresh()
 
-    def _evicted(self) -> None:
-        """The registry deleted this picture from the terminal: send it again when drawn."""
-        self._sent_box = self._placed = None
+    def _evicted(self) -> list[int]:
+        """The registry is deleting this picture from the terminal: send it again when
+        drawn. Returns every id it holds there (the spare too), for deleting."""
+        held = [self._image_id] + ([self._spare_id] if self._spare_holds else [])
+        self._spare_holds = False
+        self._forget_sent()
+        return held
 
     def on_unmount(self) -> None:
         if self.protocol in OVERLAY:
             _Painter.for_app(self.app).widgets.discard(self)
-        if self._sent_box is not None and self.protocol in ("kitty", "kitty-direct"):
-            self._write(kitty.delete(self._image_id))
-            if self._steps:
+        if self.protocol in ("kitty", "kitty-direct"):
+            if self._sent_box is not None:
+                self._write(kitty.delete(self._image_id))
+            if self._spare_holds:
                 self._write(kitty.delete(self._spare_id))
         _registry.remove(self._image_id)
+        _registry.remove(self._spare_id)
+        self._spare_holds = False
         self._sent_box = self._placed = None
+        self._upload = "unsent"
 
     def _write(self, codes: str) -> None:
         driver = getattr(self.app, "_driver", None)
