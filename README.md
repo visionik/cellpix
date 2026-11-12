@@ -49,6 +49,9 @@ runs a live picture with its frame rate and cost.
 
 ## Notes
 
+- What each terminal really does comes from [terminal-facts](https://github.com/visionik/terminal-facts),
+  vendored as `src/pixcell/terminals.toml` by `tools/update_facts.py`. It's shared with sdl-kitty, and
+  each fact has its evidence.
 - The Kitty side is written from the protocol's documentation
   (<https://sw.kovidgoyal.net/kitty/graphics-protocol/>). The placeholder row/column marks
   are generated from the Unicode Character Database by `tools/gen_diacritics.py`.
@@ -57,4 +60,4 @@ runs a live picture with its frame rate and cost.
   whose library keeps at most 10 MB) deletes pictures not drawn lately, and they're sent
   again if they come back into view.
 - Inside tmux (with `allow-passthrough on`), Kitty placeholders only; elsewhere half blocks.
-- Not yet (phase 3): Windows (a console-API probe, then Sixel for Windows Terminal).
+- On Windows the probe asks through the console API; terminals that answer with Sixel (Windows Terminal 1.22+) get Sixel.

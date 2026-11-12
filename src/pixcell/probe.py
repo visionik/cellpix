@@ -141,10 +141,13 @@ def detect(timeout: float = 0.5, tty_path: str = "/dev/tty") -> Capabilities:
     if forced in ("halfblock", "off", "host"):
         return Capabilities(forced, None, environment_name, _budget(environment_name, ""), "PIXCELL_PROTOCOL")
     tmux = bool(os.environ.get("TMUX"))
-    if os.name != "posix":
-        return Capabilities("halfblock", None, environment_name, DEFAULT_BUDGET, "not a POSIX terminal")
     try:
-        answer, columns, rows, ioctl_pixels = _ask(tty_path, timeout, tmux)
+        if os.name == "nt":
+            answer, columns, rows, ioctl_pixels = _ask_windows(timeout)
+        elif os.name == "posix":
+            answer, columns, rows, ioctl_pixels = _ask(tty_path, timeout, tmux)
+        else:
+            return Capabilities("halfblock", None, environment_name, DEFAULT_BUDGET, f"no way to ask on {os.name}")
     except OSError as error:
         reason = f"no tty ({error.strerror or error})"
         return Capabilities("halfblock", None, environment_name, DEFAULT_BUDGET, reason, tmux=tmux)
@@ -283,6 +286,98 @@ def _ask(tty_path: str, timeout: float, tmux: bool = False) -> tuple[bytes, int,
     finally:
         os.close(fd)
     return answer, columns, rows, (x_pixels, y_pixels)
+
+
+def _ask_windows(timeout: float) -> tuple[bytes, int, int, tuple[int, int]]:
+    """`_ask` on Windows: the same queries, on the console, with its input giving the
+    answers as characters (ENABLE_VIRTUAL_TERMINAL_INPUT). Reads input records, not bytes:
+    waiting says something arrived, which may be no character, and a read would block."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = (
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    )  # fmt: skip
+    invalid = wintypes.HANDLE(-1).value
+
+    class Coord(ctypes.Structure):
+        _fields_ = [("x", wintypes.SHORT), ("y", wintypes.SHORT)]
+
+    class Rect(ctypes.Structure):
+        _fields_ = [(side, wintypes.SHORT) for side in ("left", "top", "right", "bottom")]
+
+    class BufferInfo(ctypes.Structure):
+        _fields_ = [
+            ("size", Coord), ("cursor", Coord), ("attributes", wintypes.WORD), ("window", Rect), ("maximum", Coord),
+        ]  # fmt: skip
+
+    class KeyEvent(ctypes.Structure):
+        _fields_ = [
+            ("down", wintypes.BOOL), ("repeat", wintypes.WORD), ("key_code", wintypes.WORD), ("scan_code", wintypes.WORD),
+            ("char", wintypes.WCHAR), ("control", wintypes.DWORD),
+        ]  # fmt: skip
+
+    class EventUnion(ctypes.Union):
+        _fields_ = [("key", KeyEvent), ("padding", ctypes.c_byte * 16)]
+
+    class InputRecord(ctypes.Structure):
+        _fields_ = [("type", wintypes.WORD), ("event", EventUnion)]
+
+    def console(name: str) -> int:
+        generic_read_write, share_read_write, open_existing = 0xC0000000, 3, 3
+        handle = kernel32.CreateFileW(name, generic_read_write, share_read_write, None, open_existing, 0, None)
+        if handle == invalid or handle is None:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return handle
+
+    def mode_of(handle: int) -> int:
+        mode = wintypes.DWORD()
+        if not kernel32.GetConsoleMode(wintypes.HANDLE(handle), ctypes.byref(mode)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return mode.value
+
+    handle_in, handle_out = console("CONIN$"), console("CONOUT$")
+    try:
+        info = BufferInfo()
+        columns = rows = 0
+        if kernel32.GetConsoleScreenBufferInfo(wintypes.HANDLE(handle_out), ctypes.byref(info)):
+            columns = info.window.right - info.window.left + 1
+            rows = info.window.bottom - info.window.top + 1
+        saved_in, saved_out = mode_of(handle_in), mode_of(handle_out)
+        virtual_terminal_input, processed_output, virtual_terminal_output = 0x200, 0x1, 0x4
+        try:
+            kernel32.SetConsoleMode(wintypes.HANDLE(handle_in), virtual_terminal_input)  # no echo, no lines
+            kernel32.SetConsoleMode(
+                wintypes.HANDLE(handle_out), saved_out | processed_output | virtual_terminal_output
+            )
+            queries = (kitty.query(kitty.new_image_id()) + "\x1b[>0q\x1b[16t\x1b[14t\x1b]1337;ReportCellSize\x07\x1b[c").encode()
+            written = wintypes.DWORD()
+            if not kernel32.WriteFile(wintypes.HANDLE(handle_out), queries, len(queries), ctypes.byref(written), None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            answer = b""
+            deadline = time.monotonic() + timeout
+            records = (InputRecord * 64)()
+            read = wintypes.DWORD()
+            key_event = 1
+            while (left := deadline - time.monotonic()) > 0:
+                if kernel32.WaitForSingleObject(wintypes.HANDLE(handle_in), max(1, int(left * 1000))) != 0:
+                    break  # nothing more came in time
+                if not kernel32.ReadConsoleInputW(wintypes.HANDLE(handle_in), records, len(records), ctypes.byref(read)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                for record in records[: read.value]:
+                    if record.type == key_event and record.event.key.down and record.event.key.char != "\0":
+                        answer += record.event.key.char.encode("utf-8", "replace")
+                if _DEVICE_ATTRIBUTES.search(answer):
+                    deadline = min(deadline, time.monotonic() + 0.02)
+        finally:
+            kernel32.SetConsoleMode(wintypes.HANDLE(handle_in), saved_in)
+            kernel32.SetConsoleMode(wintypes.HANDLE(handle_out), saved_out)
+    finally:
+        kernel32.CloseHandle(wintypes.HANDLE(handle_in))
+        kernel32.CloseHandle(wintypes.HANDLE(handle_out))
+    return answer, columns, rows, (0, 0)
 
 
 def _cell_size(

@@ -1,5 +1,7 @@
+import sys
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from pixcell import halfblock, probe, terminal_facts
@@ -114,3 +116,42 @@ def test_name_from_environment_uses_the_shared_matchers(monkeypatch):
     monkeypatch.setenv("TERM_PROGRAM", "SomethingNew")
     monkeypatch.setenv("TERM", "xterm-256color")
     assert probe._name_from_environment() == "somethingnew"  # unknown: TERM_PROGRAM as before
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the Windows console")
+def test_windows_probe_asks_the_console_and_reads_the_answers(tmp_path):
+    """detect() in a real ConPTY, with this test playing the terminal outside it."""
+    import json
+    import threading
+    import time
+
+    import winpty
+
+    result = tmp_path / "result.json"
+    script = tmp_path / "child.py"
+    script.write_text(
+        "import json\n"
+        "from pixcell import probe\n"
+        "found = probe.detect(timeout=3.0)\n"
+        f"open({str(result)!r}, 'w').write(json.dumps([found.protocol, found.cell_size, found.reason]))\n"
+    )
+    terminal = winpty.PTY(100, 30)
+    assert terminal.spawn(sys.executable, f'"{script}"', None, None)
+
+    def play_the_terminal() -> None:
+        """Answers every query as it comes, as a terminal does (the console asks too, at
+        its start, and keeps the first device attributes for itself)."""
+        while True:
+            try:
+                text = terminal.read(blocking=True)
+            except Exception:
+                return
+            if not text and not terminal.isalive():
+                return
+            terminal.write("\x1b[6;20;10t" * text.count("\x1b[16t") + "\x1b[?62;4;22c" * text.count("\x1b[c"))
+
+    threading.Thread(target=play_the_terminal, daemon=True).start()
+    deadline = time.monotonic() + 30
+    while terminal.isalive() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert json.loads(result.read_text()) == ["sixel", [10, 20], "device attributes include Sixel"]

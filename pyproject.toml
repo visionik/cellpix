@@ -1,6 +1,6 @@
 [project]
 name = "pixcell"
-version = "0.4.0"
+version = "0.4.1"
 description = "Images in terminal cells: Kitty graphics (Unicode placeholders), iTerm2 images, Sixel and half blocks, still, animated or live, with Textual widgets."
 readme = "README.md"
 license = "MIT"
@@ -17,7 +17,7 @@ classifiers = [
 textual = ["textual>=0.80"]
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "textual>=0.80"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "textual>=0.80", "pywinpty>=2; sys_platform == 'win32'"]
 
 [build-system]
 requires = ["hatchling>=1.26"]
