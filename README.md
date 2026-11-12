@@ -43,7 +43,10 @@ live = LiveImage((640, 400), fps=30)   # in compose(), like any widget
 live.push(frame)                       # a Pillow image, from any thread: the newest wins
 ```
 
-`PIXCELL_PROTOCOL=kitty|iterm2|kitty-direct|sixel|halfblock|off` overrides the probe.
+`PIXCELL_PROTOCOL=kitty|iterm2|kitty-direct|sixel|halfblock|off|host` overrides the probe.
+`host` is never detected, only forced: something hosting the app, such as a browser, draws the
+pictures itself. The widgets then write nothing, and the host reads `Image.image`,
+`Image.animated`, `Image.alt` and `Image.live` from any widget whose `protocol` is `"host"`.
 `python -m pixcell [image ...]` shows pictures; `python -m pixcell live [fps] [scroll]`
 runs a live picture with its frame rate and cost.
 
