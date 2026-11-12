@@ -58,19 +58,22 @@ class LiveImage(Image):
             super().__init__()
             self.live, self.x, self.y, self.delta = live, x, y, delta
 
+    live = True
+
     def __init__(
         self,
         size: tuple[int, int] = (640, 400),
         *,
         fps: float = 15.0,
         protocol: str | None = None,
+        alt: str = "",
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         from PIL import Image as Pillow
 
-        super().__init__(Pillow.new("RGB", size), protocol=protocol, animate=False, name=name, id=id, classes=classes)
+        super().__init__(Pillow.new("RGB", size), protocol=protocol, animate=False, alt=alt, name=name, id=id, classes=classes)
         self.fps = fps
         self._lock = threading.Lock()
         self._pending: PILImage | None = None
@@ -113,7 +116,9 @@ class LiveImage(Image):
             self.busy_seconds += time.perf_counter() - started
 
     def _show_frame(self) -> None:
-        if self.protocol == "kitty":
+        if self.protocol == "host":
+            self.refresh()  # the host finds the new frame in self.image
+        elif self.protocol == "kitty":
             self._kitty_update()
         elif self.protocol in OVERLAY:
             self._canvas = self._crop_cache = None

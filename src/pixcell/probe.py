@@ -23,6 +23,11 @@ tmux's passthrough (it needs ``set -g allow-passthrough on``). Only placeholder 
 offered there: they're text, which tmux redraws itself.
 
 ``PIXCELL_PROTOCOL`` forces a protocol (one of :data:`PROTOCOLS`).
+
+``host`` is never detected, only forced: whatever is hosting the app, such as a browser,
+draws the pictures. pixcell keeps each widget's size and timing, draws blank cells and
+writes nothing. The host reads ``Image.image``, ``Image.animated``, ``Image.alt`` and
+``Image.live`` for any widget whose ``protocol`` is ``"host"``.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ from typing import Any
 
 from pixcell import kitty, terminal_facts
 
-PROTOCOLS = ("kitty", "iterm2", "kitty-direct", "sixel", "halfblock", "off")
+PROTOCOLS = ("kitty", "iterm2", "kitty-direct", "sixel", "halfblock", "off", "host")
 """Best first. ``kitty`` draws with Unicode placeholders; ``kitty-direct``, ``iterm2``
 and ``sixel`` paint at the cursor, after each frame (see :mod:`pixcell.textual`)."""
 
@@ -108,6 +113,8 @@ class Capabilities:
         ``PIXCELL_ANIMATION=native|stepped|0`` overrides it for Kitty terminals; ``0``
         also stills Sixel and half blocks."""
         override = os.environ.get("PIXCELL_ANIMATION", "")
+        if self.protocol == "host":
+            return "" if override == "0" else "native"  # the host plays it
         if self.protocol == "iterm2":
             plays = self.fact("iterm2.gif_animation") is True and override != "0"
             return "native" if plays else ""  # the terminal plays a GIF
@@ -130,7 +137,8 @@ def detect(timeout: float = 0.5, tty_path: str = "/dev/tty") -> Capabilities:
     """Probe the terminal. Never raises: anything unexpected gives half blocks."""
     environment_name = _name_from_environment()
     forced = os.environ.get("PIXCELL_PROTOCOL", "").lower()
-    if forced in ("halfblock", "off"):
+    # Answered without asking: "host" means the display isn't whichever terminal started us.
+    if forced in ("halfblock", "off", "host"):
         return Capabilities(forced, None, environment_name, _budget(environment_name, ""), "PIXCELL_PROTOCOL")
     tmux = bool(os.environ.get("TMUX"))
     try:
